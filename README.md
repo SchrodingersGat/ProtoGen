@@ -21,7 +21,7 @@ These problems can be averted if the internal data representation is converted t
 
 ProtoGen is a tool that takes a xml protocol description and generates html for documentation, and C source code for encoding and decoding the data. This alleviates much of the challenge and bugs in protocol development. The C source code is highly portable, readable, efficient, and well commented. It is suitable for inclusion in almost any C/C++ compiler environment.
 
-This document refers to ProtoGen version 2.5. You can download the prebuilt versions for [windows, mac, and linux here](https://github.com/billvaglienti/ProtoGen/releases). Source code for ProtoGen is available on [github](https://github.com/billvaglienti/ProtoGen).
+This document refers to ProtoGen version 2.8. You can download the prebuilt versions for [windows, mac, and linux here](https://github.com/billvaglienti/ProtoGen/releases). Source code for ProtoGen is available on [github](https://github.com/billvaglienti/ProtoGen).
 
 ---
 
@@ -59,6 +59,8 @@ ProtoGen is a C++/Qt5 compiled command line application, suitable for inclusion 
 - `-no-css` will cause ProtoGen to skip output of CSS data in generated documentation files.
 
 - `-no-unrecognized-warnings` will suppress warnings about unrecognized tags or attributes in the `Protocol.xml` file. This is useful if you add data to your xml that you expect Protogen to ignore. 
+
+- `-table-of-contents` specifies that a table of contents section should be added to the markdown output. This will be output using inline html with intra document links to the headings.
 
 Dependencies
 ------------
@@ -285,13 +287,15 @@ Structure tag Attributes:
 
 - `file` : Gives the name of the source and header file name. If this is ommitted the structure will be written to the name given by the global `file` attribute or, if that is not provided, the `prefix + name` module. If the same file is specified for multiple structures (or packets) then the relevant data are appended to that file.
 
-- `deffile` : Optional attribute used to specify a definition file which receives the structure definition (and any enumeration which is a child of the structure), in place of the normal file location for the structure definition. As with other file attributes the definition file will be correctly appended if it is used multiple times. Any extension to the `deffile` attribute will be ignored.
+- `deffile` : Optional attribute used to specify a definition file which receives the structure definition (and any enumeration which is a child of the structure), in place of the normal file location for the structure definition. As with other file attributes the definition file will be correctly appended if it is used multiple times. Any extension to the `deffile` attribute will be ignored. The `deffile` attribute will be ignored if `redefine` is used.
 
 - `encode` : By default encode functions will be output. This can be suppressed by setting `encode="false"`.
 
 - `decode` : By default decode functions will be output. This can be suppressed by setting `decode="false"`.
 
 - `verifyfile` : Optional attribute used to specify a module which receives both the init and verify functions (only if verification or initialization values exist for a member field). If verifyfile is omitted then the init and verify functions are output in the normal file. As with other file attributes the verify file will be correctly appended if it is used multiple times.
+
+- `redefine` : It is possible to create multiple encodings for an existing structure definition by using the redefine attribute to reference a previously defined structure. When doing this the structure itself will not be declared, but the encoding and decoding functions will. This requires that the encoding rules must have fields with the same names and in-memory types as the referenced structure.
 
 - `comment` : The comment for the structure will be placed at the top of the header file (or the top of the appended text if the file is used more than once).
 
@@ -425,11 +429,11 @@ Data subtag attributes:
 
 - `dependsOn` : The `dependsOn` attribute indicates that the presence of this Data item is dependent on a previously defined data item. If the previous data item evaluates as zero then this data item is skipped in the encoding. `dependsOn` is useful for encodings that do not know a-priori if a particular data item is available. For example consider a telemetry packet that reports data from all sensors connected to a device: if one of the sensors is not connected or not working then the space in the packet used to report that data can be saved. The `dependsOn` data item will typically be a single bit bitfield, but can be any previous data item which is not a structure or an array. Bitfields cannot be dependent on other data items. ProtoGen will verify that the `dependsOn` variable exists as a primitive non-array member of the encoding, *before* the definition of this data item. If the referenced data item does not exist ProtoGen will ignore the `dependsOn` attribute.
 
-- `min` : The minimum value that can be encoded. Typically encoded types take up less space than in-memory types. This is usually accomplished by scaling the data. `min`, along with `max` and the number of bits of the encoded type, is used to determine the scaling factor. `min` is ignored if the encoded type is floating, signed, or string. If `min` is not given, but `max` is, then `min` is assumed to be 0. `min` can be input as a mathematical expression in infix notation. For example -10000/2^15 would be correctly evaluated as -.30517578125. In addition the special strings "pi" and "e" are allowed, and will be replaced with their correct values. For example 180/pi would be evaluated as 57.295779513082321.
+- `min` : The minimum value that can be encoded. Typically encoded types take up less space than in-memory types. This is usually accomplished by scaling the data. `min`, along with `max` (or `scaler`) and the number of bits of the encoded type, is used to determine the scaling factor. `min` is ignored if the encoded type is floating, signed, or string. If `min` is not given, but `max` is, then `min` is assumed to be 0. `min` can be input as a mathematical expression in infix notation. For example -10000/2^15 would be correctly evaluated as -.30517578125. In addition the special strings "pi" and "e" are allowed, and will be replaced with their correct values. For example 180/pi would be evaluated as 57.295779513082321. If both the in-memory and encoded types are an integer, and if `min` is an integer, the scaling will be done using integer math rather than floating point math.
 
 - `max` : The maximum value that can be encoded. `max` is ignored if the encoded type is floating, or string. If the encoded type is signed, then the minimum encoded value is `-max`. If the encoded type is unsigned, then the minimum value is `min` (or 0 if `min` is not given). If `max` or `scaler` are not given then the in memory data are not scaled, but simply cast to the encoded type. `max` can be input as a mathematical expression in the same way as `min`.
 
-- `scaler` : The scaler that is multiplied by the in-memory type to convert to the encoded type. `scaler` is ignored if `max` is present. `scaler` and `max` (along with `min`) are different ways to represent the same thing. For signed encoded types `scaler` is converted to `max` as: `max = ((2^(numbits-1) - 1)/scaler`. For unsigned encoded types `scaler` is converted to `max` as: `max = min + ((2^numbits)-1)/scaler`. `scaler` is ignored if the encoded type is string or structure. If `scaler` or `max` are not given then the in memory data are not scaled, but simply cast to the encoded type. `scaler` can be input as a mathematical expression in the same way as `min`. Although it is unusual `scaler` can be used with floating point encoded types. This would be useful for cases where the units of the floating point encoded type do not match the desired units of the data in memory.
+- `scaler` : The scaler that is multiplied by the in-memory type to convert to the encoded type. `scaler` is ignored if `max` is present. `scaler` and `max` (along with `min`) are different ways to represent the same thing. For signed encoded types `scaler` is converted to `max` as: `max = ((2^(numbits-1) - 1)/scaler`. For unsigned encoded types `scaler` is converted to `max` as: `max = min + ((2^numbits)-1)/scaler`. `scaler` is ignored if the encoded type is string or structure. If `scaler` or `max` are not given then the in memory data are not scaled, but simply cast to the encoded type. `scaler` can be input as a mathematical expression in the same way as `min`. Although it is unusual `scaler` can be used with floating point encoded types. This would be useful for cases where the units of the floating point encoded type do not match the desired units of the data in memory. If both the in-memory and encoded types are an integer, and if `min` and `scaler` are an integers, the scaling will be done using integer math rather than floating point math.
 
 - `default` : The default value for this Data. The default value is used if the received packet length is not long enough to encode all the Data. Defaults can only be used as the last element(s) of a packet. Using defaults it is possible to augment a previously defined packet in a backwards compatible way, by extending the length of the packet and adding new fields with default values so that older packets can still be interpreted. In the case of a `string` or `fixedstring` type the default value is treated as a string of characters rather than converted to a number. In addition, in the string case, if the default string should be empty the default attribute should be set to "null". In addition the special strings "pi" and "e" are allowed, and will be replaced with their correct values; but only if the entire string can be evaluated numerically. Hence "180/pi" will be evaluated as 57.295779513082321 but "piedpiper" will not be altered.
 
@@ -468,7 +472,7 @@ Documentation examples:
 
     <Documentation comment="---"/>
 
-Inserts "---" into the markdown output. This will produce a horizontal rule in the generated html.
+Inserts "---" into the markdown output. This will produce a horizontal rule in the generated html. ProtoGen will also insert inline html to replace the horizontal rule with a page break when the html is printed (this behavior depends on the stylesheet - see the default style sheet that protogen outputs inline with the markdown).
 
     <Documentation name="Enumerations" paragraph="1" comment="Packets in the protocol refer to these global enumerations."/>
 
