@@ -17,10 +17,18 @@ ProtocolStructureModule::ProtocolStructureModule(ProtocolParser* parse, Protocol
     api(protocolApi),
     version(protocolVersion),
     encode(true),
-    decode(true)
+    decode(true),
+    compare(false),
+    print(false)
 {
     // These are attributes on top of the normal structure that we support
-    attriblist << "encode" << "decode" << "file" << "deffile" << "verifyfile" << "redefine";
+    attriblist << "encode" << "decode" << "file" << "deffile" << "verifyfile" << "comparefile" << "printfile" << "redefine";
+
+    compareSource.setCpp(true);
+    compareHeader.setCpp(true);
+    printSource.setCpp(true);
+    printHeader.setCpp(true);
+
 }
 
 
@@ -39,7 +47,12 @@ void ProtocolStructureModule::clear(void)
     source.clear();
     header.clear();
     defheader.clear();
+    compareHeader.clear();
+    compareSource.clear();
+    printHeader.clear();
+    printSource.clear();
     encode = decode = true;
+    print = compare = false;
     structfile = &header;
     verifyheaderfile = &header;
     verifysourcefile = &source;
@@ -91,8 +104,12 @@ void ProtocolStructureModule::parse(void)
     QString moduleName = ProtocolParser::getAttribute("file", map);
     QString defheadermodulename = ProtocolParser::getAttribute("deffile", map);
     QString verifymodulename = ProtocolParser::getAttribute("verifyfile", map);
+    QString comparemodulename = ProtocolParser::getAttribute("comparefile", map);
+    QString printmodulename = ProtocolParser::getAttribute("printfile", map);
     encode = !ProtocolParser::isFieldClear(ProtocolParser::getAttribute("encode", map));
     decode = !ProtocolParser::isFieldClear(ProtocolParser::getAttribute("decode", map));
+    compare = ProtocolParser::isFieldSet(ProtocolParser::getAttribute("compare", map));
+    print = ProtocolParser::isFieldSet(ProtocolParser::getAttribute("print", map));
     QString redefinename = ProtocolParser::getAttribute("redefine", map);
 
     // Warnings for users
@@ -115,7 +132,7 @@ void ProtocolStructureModule::parse(void)
     }
 
     // Do the bulk of the file creation and setup
-    setupFiles(moduleName, defheadermodulename, verifymodulename, true, true, redefines);
+    setupFiles(moduleName, defheadermodulename, verifymodulename, comparemodulename, printmodulename, true, true, redefines);
 
     // The functions to encoding and ecoding
     createStructureFunctions();
@@ -129,6 +146,20 @@ void ProtocolStructureModule::parse(void)
         source.flush();
     else
         source.clear();
+
+    // Only write the compare if we have compare functions to output
+    if(compare)
+    {
+        compareSource.flush();
+        compareHeader.flush();
+    }
+
+    // Only write the print if we have print functions to output
+    if(print)
+    {
+        printSource.flush();
+        printHeader.flush();
+    }
 
     // We don't write the verify files to disk if we are not initializing or verifying anything
     if(hasInit() || hasVerify())
@@ -144,12 +175,26 @@ void ProtocolStructureModule::parse(void)
  * Setup the files, which accounts for all the ways the fils can be organized for this structure.
  * \param moduleName is the module name from the attributes
  * \param defheadermodulename is the structure header file name from the attributes
- * \param verifymodulename is the verify module name from the attibutes
+ * \param verifymodulename is the verify module name from the attributes
+ * \param comparemodulename is the comparison module name from the attributes
+ * \param printmodulename is the print module name from the attributes
  * \param forceStructureDeclaration should be true to force the declaration of the structure, even if it only has one member
  * \param outputUtilties should be true to output the helper macros
  */
-void ProtocolStructureModule::setupFiles(QString moduleName, QString defheadermodulename, QString verifymodulename, bool forceStructureDeclaration, bool outputUtilities, const ProtocolStructureModule* redefines)
+void ProtocolStructureModule::setupFiles(QString moduleName, QString defheadermodulename, QString verifymodulename, QString comparemodulename, QString printmodulename, bool forceStructureDeclaration, bool outputUtilities, const ProtocolStructureModule* redefines)
 {
+    // User can provide compare flag, or the file name
+    if(!comparemodulename.isEmpty() || !support.globalCompareName.isEmpty())
+        compare = true;
+
+    // User can provide print flag, or the file name
+    if(!printmodulename.isEmpty() || !support.globalPrintName.isEmpty())
+        print = true;
+
+    // Must have a structure definition to do compare or print operations (for now)
+    if(compare || print)
+        forceStructureDeclaration = true;
+
     // The file directive tells us if we are creating a separate file, or if we are appending an existing one
     if(moduleName.isEmpty())
         moduleName = support.globalFileName;
@@ -159,6 +204,9 @@ void ProtocolStructureModule::setupFiles(QString moduleName, QString defheadermo
 
     verifyHeader.setLicenseText(support.licenseText);
     verifySource.setLicenseText(support.licenseText);
+
+    compareHeader.setLicenseText(support.licenseText);
+    compareSource.setLicenseText(support.licenseText);
 
     // The file names
     if(moduleName.isEmpty())
@@ -184,6 +232,40 @@ void ProtocolStructureModule::setupFiles(QString moduleName, QString defheadermo
         verifysourcefile = &verifySource;
     }
 
+    if(compare)
+    {
+        if(comparemodulename.isEmpty())
+            comparemodulename = support.globalCompareName;
+
+        if(comparemodulename.isEmpty())
+        {
+            compareHeader.setModuleNameAndPath(support.prefix, name + "_compare", support.outputpath);
+            compareSource.setModuleNameAndPath(support.prefix, name + "_compare", support.outputpath);
+        }
+        else
+        {
+            compareHeader.setModuleNameAndPath(comparemodulename, support.outputpath);
+            compareSource.setModuleNameAndPath(comparemodulename, support.outputpath);
+        }
+    }
+
+    if(print)
+    {
+        if(printmodulename.isEmpty())
+            printmodulename = support.globalPrintName;
+
+        if(printmodulename.isEmpty())
+        {
+            printHeader.setModuleNameAndPath(support.prefix, name + "_print", support.outputpath);
+            printSource.setModuleNameAndPath(support.prefix, name + "_print", support.outputpath);
+        }
+        else
+        {
+            printHeader.setModuleNameAndPath(printmodulename, support.outputpath);
+            printSource.setModuleNameAndPath(printmodulename, support.outputpath);
+        }
+    }
+
     // Two options here: we may be appending an a-priori existing file, or we may be starting one fresh.
     if(header.isAppending())
     {
@@ -191,21 +273,11 @@ void ProtocolStructureModule::setupFiles(QString moduleName, QString defheadermo
     }
     else
     {
-        // Comment block at the top of the header file
+        // Comment block at the top of the header file needed so doxygen will document the file
         header.write("/*!\n");
         header.write(" * \\file\n");
-
-        // A potentially long comment that should be wrapped at 80 characters
-        if(!comment.isEmpty())
-        {
-            header.write(" *\n");
-            header.write(ProtocolParser::outputLongComment(" *", comment) + "\n");
-        }
-
-        // Finish the top comment block
         header.write(" */\n");
         header.write("\n");
-
     }
 
     // Include the protocol top level module. This module may already be included, but in that case it won't be included twice
@@ -239,8 +311,14 @@ void ProtocolStructureModule::setupFiles(QString moduleName, QString defheadermo
         header.writeIncludeDirective(structfile->fileName());
     }
 
-    // The verify file needs access to the struct file
+    // The verify, comparison, and print files needs access to the struct file
     verifyheaderfile->writeIncludeDirective(structfile->fileName());
+    compareHeader.writeIncludeDirective(structfile->fileName());
+    compareHeader.writeIncludeDirective(header.fileName());
+    compareHeader.writeIncludeDirective("QString", QString(), true, false);
+    printHeader.writeIncludeDirective(structfile->fileName());
+    printHeader.writeIncludeDirective(header.fileName());
+    printHeader.writeIncludeDirective("QString", QString(), true, false);
 
     // The verification details may be spread across multiple files
     QStringList list;
@@ -361,7 +439,7 @@ void ProtocolStructureModule::createStructureFunctions(const ProtocolStructureMo
     createSubStructureFunctions(redefines);
 
     // Now build the top level function
-    createTopLevelStructureFunctions();
+    createTopLevelStructureFunctions(redefines);
 
 }// ProtocolStructureModule::createStructureFunctions
 
@@ -416,6 +494,25 @@ void ProtocolStructureModule::createSubStructureFunctions(const ProtocolStructur
             verifysourcefile->write(structure->getVerifyFunctionString());
             verifysourcefile->makeLineSeparator();
         }
+
+        if(compare)
+        {
+            compareSource.makeLineSeparator();
+            compareSource.write(structure->getComparisonFunctionPrototype());
+            compareSource.makeLineSeparator();
+            compareSource.write(structure->getComparisonFunctionString());
+            compareSource.makeLineSeparator();
+        }
+
+        if(print)
+        {
+            printSource.makeLineSeparator();
+            printSource.write(structure->getTextPrintFunctionPrototype());
+            printSource.makeLineSeparator();
+            printSource.write(structure->getTextPrintFunctionString());
+            printSource.makeLineSeparator();
+        }
+
     }
 
     source.makeLineSeparator();
@@ -427,7 +524,7 @@ void ProtocolStructureModule::createSubStructureFunctions(const ProtocolStructur
  * Write data to the source and header files to encode and decode this structure
  * but not its children. This will add to the length strings, but not reset them
  */
-void ProtocolStructureModule::createTopLevelStructureFunctions(void)
+void ProtocolStructureModule::createTopLevelStructureFunctions(const ProtocolStructureModule* redefines)
 {
     if(encode)
     {
@@ -444,6 +541,12 @@ void ProtocolStructureModule::createTopLevelStructureFunctions(void)
         source.makeLineSeparator();
         source.write(getFunctionDecodeString(support.bigendian, false));
     }
+
+    header.makeLineSeparator();
+    source.makeLineSeparator();
+
+    if(redefines != NULL)
+        return;
 
     if(hasInit())
     {
@@ -467,7 +570,28 @@ void ProtocolStructureModule::createTopLevelStructureFunctions(void)
         verifysourcefile->makeLineSeparator();
     }
 
-    header.makeLineSeparator();
-    source.makeLineSeparator();
+
+    if(compare)
+    {
+        compareHeader.makeLineSeparator();
+        compareHeader.write(getComparisonFunctionPrototype(false));
+        compareHeader.makeLineSeparator();
+
+        compareSource.makeLineSeparator();
+        compareSource.write(getComparisonFunctionString(false));
+        compareSource.makeLineSeparator();
+    }
+
+
+    if(print)
+    {
+        printHeader.makeLineSeparator();
+        printHeader.write(getTextPrintFunctionPrototype(false));
+        printHeader.makeLineSeparator();
+
+        printSource.makeLineSeparator();
+        printSource.write(getTextPrintFunctionString(false));
+        printSource.makeLineSeparator();
+    }
 
 }// ProtocolStructureModule::createTopLevelStructureFunctions

@@ -77,8 +77,12 @@ void ProtocolPacket::parse(void)
     QString moduleName = ProtocolParser::getAttribute("file", map);
     QString defheadermodulename = ProtocolParser::getAttribute("deffile", map);
     QString verifymodulename = ProtocolParser::getAttribute("verifyfile", map);
+    QString comparemodulename = ProtocolParser::getAttribute("comparefile", map);
+    QString printmodulename = ProtocolParser::getAttribute("printfile", map);
     encode = !ProtocolParser::isFieldClear(ProtocolParser::getAttribute("encode", map));
     decode = !ProtocolParser::isFieldClear(ProtocolParser::getAttribute("decode", map));
+    compare = ProtocolParser::isFieldSet(ProtocolParser::getAttribute("compare", map));
+    print = ProtocolParser::isFieldSet(ProtocolParser::getAttribute("print", map));
     bool outputTopLevelStructureCode = ProtocolParser::isFieldSet("useInOtherPackets", map);
     QString redefinename = ProtocolParser::getAttribute("redefine", map);
 
@@ -163,7 +167,7 @@ void ProtocolPacket::parse(void)
     // Most of the file setup work, note that we do not declare a structure in
     // the event that it has only one member and we are not doing structure
     // interfaces to the encode/decode routines
-    setupFiles(moduleName, defheadermodulename, verifymodulename, structureFunctions, false, redefines);
+    setupFiles(moduleName, defheadermodulename, verifymodulename, comparemodulename, printmodulename, structureFunctions, false, redefines);
 
     // The functions that include structures which are children of this
     // packet. These need to be declared before the main functions
@@ -173,14 +177,14 @@ void ProtocolPacket::parse(void)
     if(outputTopLevelStructureCode)
     {
         // Note that this call will also handle the output of top level
-        // initialize and verify functions
-        createTopLevelStructureFunctions();
+        // initialize, verify, and compare functions
+        createTopLevelStructureFunctions(redefines);
     }
     else
     {
         // If we are not outputting the top level structure, we need to
-        // explicitly output the initialize and verify functions
-        if(hasInit())
+        // explicitly output the initialize, verify, and comparison functions
+        if(hasInit() && (redefines == NULL))
         {
             verifyheaderfile->makeLineSeparator();
             verifyheaderfile->write(getSetToInitialValueFunctionPrototype(false));
@@ -191,7 +195,7 @@ void ProtocolPacket::parse(void)
             verifysourcefile->makeLineSeparator();
         }
 
-        if(hasVerify())
+        if(hasVerify() && (redefines == NULL))
         {
             verifyheaderfile->makeLineSeparator();
             verifyheaderfile->write(getVerifyFunctionPrototype(false));
@@ -201,6 +205,41 @@ void ProtocolPacket::parse(void)
             verifysourcefile->write(getVerifyFunctionString(false));
             verifysourcefile->makeLineSeparator();
         }
+
+        if(compare)
+        {
+            if(redefines == NULL)
+            {
+                compareHeader.makeLineSeparator();
+                compareHeader.write(getComparisonFunctionPrototype(false));
+                compareHeader.makeLineSeparator();
+
+                compareSource.makeLineSeparator();
+                compareSource.write(getComparisonFunctionString(false));
+                compareSource.makeLineSeparator();
+            }
+
+            // Must have structure functions to do comparisons
+            structureFunctions = true;
+        }
+
+        if(print)
+        {
+            if(redefines == NULL)
+            {
+                printHeader.makeLineSeparator();
+                printHeader.write(getTextPrintFunctionPrototype(false));
+                printHeader.makeLineSeparator();
+
+                printSource.makeLineSeparator();
+                printSource.write(getTextPrintFunctionString(false));
+                printSource.makeLineSeparator();
+            }
+
+            // Must have structure functions to do printing
+            structureFunctions = true;
+        }
+
     }
 
     // The functions that encode and decode the packet from a structure.
@@ -232,6 +271,18 @@ void ProtocolPacket::parse(void)
     {
         verifyheaderfile->flush();
         verifysourcefile->flush();
+    }
+
+    if(compare)
+    {
+        compareHeader.flush();
+        compareSource.flush();
+    }
+
+    if(print)
+    {
+        printHeader.flush();
+        printSource.flush();
     }
 
 }// ProtocolPacket::parse
@@ -333,6 +384,22 @@ void ProtocolPacket::createStructurePacketFunctions(void)
             header.write(PKT_DECODE + ");\n");
     }
 
+    if(compare)
+    {
+        compareHeader.makeLineSeparator();
+        compareHeader.write("//! Compare two " + support.prefix + name + " packets and generate a report\n");
+        compareHeader.write("QString compare" + support.prefix + name + support.packetParameterSuffix + "(const " + support.pointerType + " pkt1, const " + support.pointerType + " pkt2);\n");
+        compareHeader.makeLineSeparator();
+    }
+
+    if(print)
+    {
+        printHeader.makeLineSeparator();
+        printHeader.write("//! Generate a string that describes the contents of a " + name + " packet\n");
+        printHeader.write("QString textPrint" + support.prefix + name + support.packetParameterSuffix + "(const " + support.pointerType + " pkt);\n");
+        printHeader.makeLineSeparator();
+    }
+
     if(encode)
     {
         // The source function for the encode function
@@ -375,7 +442,9 @@ void ProtocolPacket::createStructurePacketFunctions(void)
             source.write("{\n");
         }
 
-        source.write(TAB_IN + "uint8_t* data = get" + support.protoName + "PacketData(pkt);\n");
+        if(getNumberOfEncodes() > 0)
+            source.write(TAB_IN + "uint8_t* data = get" + support.protoName + "PacketData(pkt);\n");
+
         source.write(TAB_IN + "int byteindex = 0;\n");
 
         if(usestempencodebitfields)
@@ -564,6 +633,127 @@ void ProtocolPacket::createStructurePacketFunctions(void)
         }// else if no fields to decode
 
     }// if decode function enabled
+
+    if(compare)
+    {
+        compareSource.makeLineSeparator();
+        compareSource.write("/*!\n");
+        compareSource.write(" * Compare two " + name + " packets and generate a report of any differences.\n");
+        compareSource.write(" * \\param prename is prepended to the name of the data field in the comparison report\n");
+        compareSource.write(" * \\param pkt1 is the first data to compare\n");
+        compareSource.write(" * \\param pkt2 is the second data to compare\n");
+        compareSource.write(" * \\return a string describing any differences between pk1 and pkt2. The string will be empty if there are no differences\n");
+        compareSource.write(" */\n");
+        compareSource.write("QString compare" + support.prefix + name + support.packetParameterSuffix + "(const " + support.pointerType + " pkt1, const " + support.pointerType + " pkt2)\n");
+        compareSource.write("{\n");
+        compareSource.write(TAB_IN + "QString report;\n");
+
+        if(numDecodes > 0)
+        {
+            compareSource.makeLineSeparator();
+            compareSource.write(TAB_IN + "// Structures to decode into\n");
+            compareSource.write(TAB_IN + structName + " struct1, struct2;\n");
+
+            compareSource.makeLineSeparator();
+            compareSource.write(TAB_IN + "// All zeroes before decoding\n");
+            compareSource.write(TAB_IN + "memset(&struct1, 0, sizeof(struct1));\n");
+            compareSource.write(TAB_IN + "memset(&struct2, 0, sizeof(struct2));\n");
+
+            compareSource.makeLineSeparator();
+            compareSource.write(TAB_IN + "// Decode each packet\n");
+            compareSource.write(TAB_IN + "if(!decode" + extendedName() + "(pkt1, &struct1) || !decode" + extendedName() + "(pkt2, &struct2))\n");
+            compareSource.write(TAB_IN + "{\n");
+            compareSource.write(TAB_IN + TAB_IN + "report = \"" + name + " packets failed to decode\\n\";\n");
+            compareSource.write(TAB_IN + TAB_IN + "return report;\n");
+            compareSource.write(TAB_IN + "}\n");
+        }
+        else
+        {
+            compareSource.makeLineSeparator();
+            compareSource.write(TAB_IN + "// Check packet types\n");
+            compareSource.write(TAB_IN + "if((get" + support.protoName + "PacketID(pkt1) != get" + support.protoName + "PacketID(pkt2)) || (get"+ support.protoName + "PacketID(pkt1) != get" + support.prefix + name + support.packetParameterSuffix + "ID()))\n");
+            compareSource.write(TAB_IN + "{\n");
+            compareSource.write(TAB_IN + TAB_IN + "report += \"" + name + " packet IDs are different\\n\";\n");
+            compareSource.write(TAB_IN + TAB_IN + "return report;\n");
+            compareSource.write(TAB_IN + "}\n");
+        }
+
+        compareSource.makeLineSeparator();
+        compareSource.write(TAB_IN + "// Check packet sizes. Even if sizes are different the packets may contain the same result\n");
+        compareSource.write(TAB_IN + "if(get" + support.protoName + "PacketSize(pkt1) != get" + support.protoName + "PacketSize(pkt2))\n");
+        compareSource.write(TAB_IN + TAB_IN + "report += \"" + name + " packet sizes are different\\n\";\n");
+
+        if(numDecodes > 0)
+        {
+            compareSource.makeLineSeparator();
+            compareSource.write(TAB_IN + "report += compare" + structName + "(\"name\", &struct1, &struct2);\n");
+        }
+
+        compareSource.makeLineSeparator();
+        compareSource.write(TAB_IN + "return report;\n");
+        compareSource.write("\n");
+        compareSource.write("}// compare" + support.prefix + name + support.packetParameterSuffix + "\n");
+
+    }// if we need to generate compare functions
+
+    if(print)
+    {
+        printSource.makeLineSeparator();
+        printSource.write("/*!\n");
+        printSource.write(" * Generate a string that describes the contents of a " + name + " packet\n");
+        printSource.write(" * \\param prename is prepended to the name of the data field in the report\n");
+        printSource.write(" * \\param pkt is the data to print\n");
+        printSource.write(" * \\return a string describing the contents of pkt\n");
+        printSource.write(" */\n");
+        printSource.write("QString textPrint" + support.prefix + name + support.packetParameterSuffix + "(const " + support.pointerType + " pkt)\n");
+        printSource.write("{\n");
+        printSource.write(TAB_IN + "QString report;\n");
+
+        if(numDecodes > 0)
+        {
+            printSource.makeLineSeparator();
+            printSource.write(TAB_IN + "// Structure to decode into\n");
+            printSource.write(TAB_IN + structName + " user;\n");
+
+            printSource.makeLineSeparator();
+            printSource.write(TAB_IN + "// All zeroes before decoding\n");
+            printSource.write(TAB_IN + "memset(&user, 0, sizeof(user));\n");
+
+            printSource.makeLineSeparator();
+            printSource.write(TAB_IN + "// Decode packet\n");
+            printSource.write(TAB_IN + "if(!decode" + extendedName() + "(pkt, &user))\n");
+            printSource.write(TAB_IN + "{\n");
+            printSource.write(TAB_IN + TAB_IN + "report = \"" + name + " packet failed to decode\\n\";\n");
+            printSource.write(TAB_IN + TAB_IN + "return report;\n");
+            printSource.write(TAB_IN + "}\n");
+        }
+        else
+        {
+            printSource.makeLineSeparator();
+            printSource.write(TAB_IN + "// Check packet type\n");
+            printSource.write(TAB_IN + "if(get"+ support.protoName + "PacketID(pkt) != get" + support.prefix + name + support.packetParameterSuffix + "ID())\n");
+            printSource.write(TAB_IN + "{\n");
+            printSource.write(TAB_IN + TAB_IN + "report += \"" + name + " packet ID is incorrect\\n\";\n");
+            printSource.write(TAB_IN + TAB_IN + "return report;\n");
+            printSource.write(TAB_IN + "}\n");
+        }
+
+        printSource.makeLineSeparator();
+        printSource.write(TAB_IN + "// Print the packet size\n");
+        printSource.write(TAB_IN + "report += \"" + name + " packet size is \" + QString::number(get" + support.protoName + "PacketSize(pkt)) + \"\\n\";\n");
+
+        if(numDecodes > 0)
+        {
+            printSource.makeLineSeparator();
+            printSource.write(TAB_IN + "report += textPrint" + structName + "(\"name\", &user);\n");
+        }
+
+        printSource.makeLineSeparator();
+        printSource.write(TAB_IN + "return report;\n");
+        printSource.write("\n");
+        printSource.write("}// textPrint" + support.prefix + name + support.packetParameterSuffix + "\n");
+
+    }// if we need to generate print functions
 
 }// createStructurePacketFunctions
 

@@ -263,6 +263,25 @@ void ProtocolField::setPreviousEncodable(Encodable* prev)
 
             // We start at some nonzero bitcount that continues from the previous
             setStartingBitCount(prevField->getEndingBitCount());
+
+            // Now that we know our starting bitcount we can apply the bitfield defaults warning
+            if(!defaultString.isEmpty() && (defaultString != "0") && (bitfieldData.startingBitCount != 0) && !bitfieldCrossesByteBoundary())
+            {
+                // The key concept is this: bitfields can have defaults, but if
+                // the bitfield does not start a new byte it is possible (not
+                // guaranteed) that the default will be overwritten because the
+                // previous bitfield will have caused the packet length to
+                // satisfy the length requirement. As an example:
+                //
+                // Old packet = 1 byte + 1 bit.
+                // New augmented packet = 1 byte + 2 bits (second bit has a default).
+                //
+                // The length of the old and new packets is the same (2 bytes)
+                // which means the default value for the augmented bit will
+                // always be overwritten with zero.
+                emitWarning("Bitfield with non-zero default which does not start a new byte; default may not be obeyed");
+            }
+
         }
 
     }// if previous and us are bitfields
@@ -906,9 +925,6 @@ void ProtocolField::parse(void)
     // enumeration in which the maximum enumeration fits in fewer than 8 bits
     if(encodedType.isBitfield)
     {
-        // We always terminate the bitfield until we know otherwise
-        bitfieldData.lastBitfield = true;
-
         // Do we start a bitfield group?
         if(bitfieldData.groupMember)
         {
@@ -2103,6 +2119,282 @@ QString ProtocolField::getVerifyString(bool isStructureMember) const
 
 
 /*!
+* Get the string used for coparing this field.
+* \param isStructureMember should be true to indicate this field is accessed as a member structure
+* \return the string used to compare this field, which may be empty
+*/
+QString ProtocolField::getComparisonString(bool isStructureMember) const
+{
+    QString output;
+
+    // No comparison if nothing is in memory or if not encoded
+    if(inMemoryType.isNull || encodedType.isNull)
+        return output;
+
+    QString access1, access2;
+
+    if(isStructureMember)
+    {
+        access1 = "user1->" + name;
+        access2 = "user2->" + name;
+    }
+    else
+    {
+        access1 = name + "_1";
+        access2 = name + "_2";
+    }
+
+    if(inMemoryType.isString)
+    {
+        output += TAB_IN + "if(QString::compare(" + access1 + ", " + access2 + ") != 0)\n";
+        output += TAB_IN + TAB_IN + "report += prename + \":" + name + " strings differ\\n\";\n";
+    }
+    else
+    {
+        QString spacing = TAB_IN;
+        bool closearraytest = false;
+        bool closearraytest2 = false;
+        bool closeforloop = false;
+        bool closeforloop2 = false;
+
+        if(isArray())
+        {
+            if(!variableArray.isEmpty() && isStructureMember)
+            {
+                output += spacing + "if(user1->" + variableArray + " == user2->" + variableArray + ")\n";
+                output += spacing + "{\n";
+                spacing += TAB_IN;
+                closearraytest = true;
+
+                output += spacing + "for(i = 0; (i < " + array + ") && (i < user1->" + variableArray + "); i++)\n";
+                output += spacing + "{\n";
+                spacing += TAB_IN;
+                closeforloop = true;
+            }
+            else
+            {
+                output += spacing + "for(i = 0; i < " + array + "; i++)\n";
+                spacing += TAB_IN;
+            }
+
+            access1 = access1 + "[i]";
+            access2 = access2 + "[i]";
+        }
+
+        if(is2dArray())
+        {
+            if(!variable2dArray.isEmpty() && isStructureMember)
+            {
+                output += spacing + "if(user1->" + variable2dArray + " == user2->" + variable2dArray + ")\n";
+                output += spacing + "{\n";
+                spacing += TAB_IN;
+                closearraytest2 = true;
+
+                output += spacing + "for(j = 0; (j < " + array2d + ") && (j < user1->" + variable2dArray + "); j++)\n";
+                output += spacing + "{\n";
+                spacing += TAB_IN;
+                closeforloop2 = true;
+            }
+            else
+            {
+                output += spacing + "for(j = 0; j < " + array2d + "; j++)\n";
+                spacing += TAB_IN;
+            }
+
+            access1 = access1 + "[j]";
+            access2 = access2 + "[j]";
+        }
+
+        if(inMemoryType.isStruct)
+        {
+            output += spacing + "report += compare" + typeName + "(prename + \":" + name + "\"";
+
+            if(isArray())
+                output += " + \"[\" + QString::number(i) + \"]\"";
+
+            if(is2dArray())
+                output += " + \"[\" + QString::number(j) + \"]\"";
+
+            // Structure compare we need to pass the address of the structure, not the object
+            output += ", &" + access1 + ", &" + access2 + ");\n";
+        }
+        else
+        {
+            // Simple value comparison to generate the report
+            output += spacing + "if(" + access1 + " != " + access2 + ")\n";
+
+            // The report includes the prename and the name
+            output += spacing + TAB_IN + "report += prename + \":" + name + "\" ";
+
+            // The report needs to include the array indices
+            if(isArray())
+                output += " + \"[\" + QString::number(i) + \"]\"";
+
+            if(is2dArray())
+                output += " + \"[\" + QString::number(j) + \"]\"";
+
+            // And finally the values go into the report
+            if(inMemoryType.isFloat)
+                output += " + \" '\" + QString::number(" + access1 + ", 'g', 16) + \"' '\" + QString::number(" + access2 + ", 'g', 16) + \"'\\n\";\n";
+            else
+                output += " + \" '\" + QString::number(" + access1 + ") + \"' '\" + QString::number(" + access2 + ") + \"'\\n\";\n";
+
+        }// else not a struct
+
+        if(closeforloop2)
+        {
+            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
+            output += spacing + "}\n";
+        }
+
+        if(closearraytest2)
+        {
+            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
+            output += spacing + "}\n";
+            output += spacing + "else\n";
+            output += spacing + TAB_IN + "report += prename + \":" + name + " 2nd array dimension differs, array not compared\\n\";\n";
+        }
+
+        if(closeforloop)
+        {
+            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
+            output += spacing + "}\n";
+        }
+
+        if(closearraytest)
+        {
+            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
+            output += spacing + "}\n";
+            output += spacing + "else\n";
+            output += spacing + TAB_IN + "report += prename + \":" + name + " array dimension differs, array not compared\\n\";\n";
+        }
+
+    }// else numeric output
+
+    return output;
+
+}// ProtocolField::getComparisonString
+
+
+/*!
+ * Get the string used for text printing this field.
+ * \param isStructureMember should be true to indicate this field is accessed as a member structure
+ * \return the string used to print this field as text, which may be empty
+ */
+QString ProtocolField::getTextPrintString(bool isStructureMember) const
+{
+    QString output;
+
+    // No print if nothing is in memory
+    if(inMemoryType.isNull)
+        return output;
+
+    QString access;
+
+    if(isStructureMember)
+        access = "user->" + name;
+    else
+        access = name;
+
+    if(inMemoryType.isString)
+    {
+        output += TAB_IN + "report += prename + \":" + name + " \" + QString(" + access + ");\n";
+    }
+    else
+    {
+        QString spacing = TAB_IN;
+        bool closeforloop = false;
+        bool closeforloop2 = false;
+
+        if(isArray())
+        {
+            if(!variableArray.isEmpty() && isStructureMember)
+            {
+                output += spacing + "for(i = 0; (i < " + array + ") && (i < user->" + variableArray + "); i++)\n";
+                output += spacing + "{\n";
+                spacing += TAB_IN;
+                closeforloop = true;
+            }
+            else
+            {
+                output += spacing + "for(i = 0; i < " + array + "; i++)\n";
+                spacing += TAB_IN;
+            }
+
+            access = access + "[i]";
+        }
+
+        if(is2dArray())
+        {
+            if(!variable2dArray.isEmpty() && isStructureMember)
+            {
+                output += spacing + "for(j = 0; (j < " + array2d + ") && (j < user->" + variable2dArray + "); j++)\n";
+                output += spacing + "{\n";
+                spacing += TAB_IN;
+                closeforloop2 = true;
+            }
+            else
+            {
+                output += spacing + "for(j = 0; j < " + array2d + "; j++)\n";
+                spacing += TAB_IN;
+            }
+
+            access = access + "[j]";
+        }
+
+        if(inMemoryType.isStruct)
+        {
+            output += spacing + "report += textPrint" + typeName + "(prename + \":" + name + "\"";
+
+            if(isArray())
+                output += " + \"[\" + QString::number(i) + \"]\"";
+
+            if(is2dArray())
+                output += " + \"[\" + QString::number(j) + \"]\"";
+
+            // Structure print we need to pass the address of the structure, not the object
+            output += ", &" + access + ");\n";
+        }
+        else
+        {
+            // The report includes the prename and the name
+            output += spacing + "report += prename + \":" + name + "\" ";
+
+            // The report needs to include the array indices
+            if(isArray())
+                output += " + \"[\" + QString::number(i) + \"]\"";
+
+            if(is2dArray())
+                output += " + \"[\" + QString::number(j) + \"]\"";
+
+            // And finally the values go into the report
+            if(inMemoryType.isFloat)
+                output += " + \" '\" + QString::number(" + access + ", 'g', 16) + \"'\\n\";\n";
+            else
+                output += " + \" '\" + QString::number(" + access + ") + \"'\\n\";\n";
+
+        }// else not a struct
+
+        if(closeforloop2)
+        {
+            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
+            output += spacing + "}\n";
+        }
+
+        if(closeforloop)
+        {
+            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
+            output += spacing + "}\n";
+        }
+
+    }// else numeric output
+
+    return output;
+
+}// ProtocolField::getTextPrintString
+
+
+/*!
  * Return the string that sets this encodable to its default value in code
  * \param isStructureMember should be true if this field is accessed through a "user" structure pointer
  * \return the string to add to the source file, including line feed
@@ -2636,19 +2928,29 @@ QString ProtocolField::getDecodeStringForBitfield(int* bitcount, bool isStructur
     // If this field has a default value, or overrides a previous value
     if(defaultEnabled && (!defaultString.isEmpty() || overridesPrevious))
     {
+        int bytes;
+
         QString lengthString;
 
         // How many bytes do we need? From 1 to 8 bits we need 1 byte, from
         // 9 to 15 we need 2 bytes, etc. However, some bits may already have
         // gone by
         if(bitfieldData.groupStart)
-            lengthString = QString::number((bitfieldData.groupBits+7)/8);
+            bytes = (bitfieldData.groupBits+7)/8;
         else
-            lengthString = QString::number(((*bitcount) + encodedType.bits + 7) / 8);
+            bytes = ((*bitcount) + encodedType.bits + 7)/8;
 
-        output += TAB_IN + "if(byteindex + " + lengthString + " > numBytes)\n";
-        output += TAB_IN + "    return 1;\n";
-        output += "\n";
+        lengthString = QString::number(bytes);
+
+        // Technically we only need to check the length if bitcount is zero
+        // (i.e. a new byte is being decoded) or if this bitfield will cross
+        // a byte boundary (again, requiring a new byte)
+        if(((*bitcount) == 0) || (bytes > 1))
+        {
+            output += TAB_IN + "if(byteindex + " + lengthString + " > numBytes)\n";
+            output += TAB_IN + "    return 1;\n";
+            output += "\n";
+        }
     }
 
     if(bitfieldData.groupStart)

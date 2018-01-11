@@ -22,7 +22,8 @@ ProtocolFile::ProtocolFile(const QString& moduleName, bool temp) :
     module(moduleName),
     dirty(false),
     appending(false),
-    temporary(temp)
+    temporary(temp),
+    iscpp(false)
 {
 }
 
@@ -34,7 +35,8 @@ ProtocolFile::ProtocolFile(const QString& moduleName, bool temp) :
 ProtocolFile::ProtocolFile() :
     dirty(false),
     appending(false),
-    temporary(true)
+    temporary(true),
+    iscpp(false)
 {
 }
 
@@ -73,7 +75,12 @@ void ProtocolFile::setModuleNameAndPath(QString prefix, QString name, QString fi
         if(namepath.contains(":") || namepath.startsWith('\\') || namepath.startsWith('/'))
             filepath = namepath;
         else
+        {
+            if(filepath.isEmpty())
+                filepath += ".";
+
             filepath += "/" + namepath;
+        }
 
         // The name without the path data
         name = name.right(name.size() - index - 1);
@@ -158,8 +165,10 @@ void ProtocolFile::writeIncludeDirectives(const QStringList& list)
  * \param include is the module name to include
  * \param comment is a trailing comment for the include directive, can be empty
  * \param global should be true to use brackets ("<>") instead of quotes.
+ * \param autoextensions should be true to automatically append ".h" to the
+ *        include name if it is not already included
  */
-void ProtocolFile::writeIncludeDirective(const QString& include, const QString& comment, bool Global)
+void ProtocolFile::writeIncludeDirective(const QString& include, const QString& comment, bool global, bool autoextension)
 {
     if(include.isEmpty())
         return;
@@ -167,7 +176,7 @@ void ProtocolFile::writeIncludeDirective(const QString& include, const QString& 
     QString directive = include.trimmed();
 
     // Technically things other than .h* could be included, but not by ProtoGen
-    if(!directive.contains(".h"))
+    if(!directive.contains(".h") && autoextension)
         directive += ".h";
 
     // Don't include ourselves
@@ -175,7 +184,7 @@ void ProtocolFile::writeIncludeDirective(const QString& include, const QString& 
         return;
 
     // Build the include directive with quotes or brackets based on the global status
-    if (Global == false)
+    if (global == false)
         directive = "#include \"" + directive + "\"";
     else
         directive = "#include <" + directive + ">";
@@ -401,6 +410,7 @@ void ProtocolFile::copyTemporaryFile(const QString& path, const QString& fileNam
  */
 void ProtocolFile::deleteModule(const QString& moduleName)
 {
+    deleteFile(moduleName + ".cpp");
     deleteFile(moduleName + ".c");
     deleteFile(moduleName + ".h");
 }
@@ -539,10 +549,13 @@ QString ProtocolHeaderFile::getClosingStatement(void)
 {
     QString close;
 
-    // close the __cplusplus
-    close += "#ifdef __cplusplus\n";
-    close += "}\n";
-    close += "#endif\n";
+    if(!iscpp)
+    {
+        // close the __cplusplus
+        close += "#ifdef __cplusplus\n";
+        close += "}\n";
+        close += "#endif\n";
+    }
 
     // close the opening #ifdef
     close += "#endif\n";
@@ -599,10 +612,13 @@ void ProtocolHeaderFile::prepareToAppend(void)
         write(qPrintable("#ifndef " + define + "\n"));
         write(qPrintable("#define " + define + "\n"));
 
-        write("\n// C++ compilers: don't mangle us\n");
-        write("#ifdef __cplusplus\n");
-        write("extern \"C\" {\n");
-        write("#endif\n\n");
+        if(!iscpp)
+        {
+            write("\n// C++ compilers: don't mangle us\n");
+            write("#ifdef __cplusplus\n");
+            write("extern \"C\" {\n");
+            write("#endif\n\n");
+        }
     }
 
 }// ProtocolHeaderFile::prepareToAppend
@@ -616,9 +632,14 @@ void ProtocolSourceFile::extractExtension(QString& name)
 {
     ProtocolFile::extractExtension(name);
 
-    // A source file extension must start with ".c" (.c, .cpp, .cxx, etc.)
-    if(!extension.contains(".c", Qt::CaseInsensitive))
-        extension = ".c";
+    if(iscpp)
+        extension = ".cpp";
+    else
+    {
+        // A source file extension must start with ".c" (.c, .cpp, .cxx, etc.)
+        if(!extension.contains(".c", Qt::CaseInsensitive))
+            extension = ".c";
+    }
 
 }// ProtocolSourceFile::extractExtension
 

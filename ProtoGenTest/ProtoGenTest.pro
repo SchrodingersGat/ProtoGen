@@ -34,7 +34,9 @@ SOURCES += main.cpp \
     bitfieldtest.c \
     definitions/verify.c \
     verify/dateverify.c \
-    DemolinkProtocol.c
+    DemolinkProtocol.c \
+    compare/compareDemolink.cpp \
+    compare/printDemolink.cpp
 
 HEADERS += \
     indices.h \
@@ -53,7 +55,9 @@ HEADERS += \
     bitfieldtest.h \
     definitions/verify.h \
     OtherDefinitions.h \
-    verify/dateverify.h
+    verify/dateverify.h \
+    compare/compareDemolink.h \
+    compare/printDemolink.h
 
 OTHER_FILES += \
     Doxyfile

@@ -29,7 +29,7 @@ public:
     void writeIncludeDirectives(const QStringList& list);
 
     //! Output an include directive
-    void writeIncludeDirective(const QString& include, const QString& comment = QString(), bool Global = false);
+    void writeIncludeDirective(const QString& include, const QString& comment = QString(), bool global = false, bool autoextension = true);
 
     //! Set the license text for the file
     void setLicenseText(const QString text) { license = text; }
@@ -39,6 +39,12 @@ public:
 
     //! Set the name of the module
     void setModuleNameAndPath(QString prefix, QString name, QString filepath);
+
+    //! Set this files c++ status
+    void setCpp(bool cpp) {iscpp = cpp;}
+
+    //! Return true if this file is part of a c++ module
+    bool isCpp(void) const {return iscpp;}
 
     //! Return the path
     virtual QString filePath(void) const {return path;}
@@ -100,6 +106,7 @@ protected:
     bool dirty;         //!< Flag set to indicate that the file contents are dirty and need to be flushed
     bool appending;     //!< Flag set if an append operation is in progress
     bool temporary;     //!< Flag to indicate this is a temporary file with "temporarydeleteme_" preceding the name
+    bool iscpp;         //!< Flag to indicate this file belongs to a c++ module
 };
 
 
@@ -141,6 +148,5 @@ protected:
     //! \return the text that is appended to close a source file
     QString getClosingStatement(void);
 };
-
 
 #endif // PROTOCOLFILE_H
