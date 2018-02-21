@@ -17,7 +17,7 @@
 #include <iostream>
 
 // The version of the protocol generator is set here
-const QString ProtocolParser::genVersion = "2.12.b";
+const QString ProtocolParser::genVersion = "2.14.e";
 
 /*!
  * \brief ProtocolParser::ProtocolParser
@@ -205,9 +205,9 @@ bool ProtocolParser::parse(QString filename, QString path, QStringList otherfile
     {
         EnumCreator* module = globalEnums.at(i);
 
-        module->parseGlobal(name + "Protocol");
+        module->parseGlobal();
         enumfile.setLicenseText(support.licenseText);
-        enumfile.setModuleNameAndPath(module->getHeaderFileName(), support.outputpath);
+        enumfile.setModuleNameAndPath(module->getHeaderFileName(), module->getHeaderFilePath());
         enumfile.write(module->getOutput());
         enumfile.makeLineSeparator();
         enumfile.flush();
@@ -635,19 +635,25 @@ void ProtocolParser::createProtocolHeader(const QDomElement& docElem)
         header.write("\n");
     }
 
+    if(version.isEmpty() && api.isEmpty())
+        header.write("\n");
+
     header.write(" */\n");
-    header.write("\n");
+
+    header.makeLineSeparator();
 
     // Includes
-    header.write("#include <stdint.h>\n");
+    header.writeIncludeDirective("stdint.h", QString(), true);
 
     // Add other includes
     outputIncludes(name, header, docElem);
 
+    header.makeLineSeparator();
+
     // API functions
     if(!api.isEmpty())
     {
-        header.write("\n");
+        header.makeLineSeparator();
         header.write("//! \\return the protocol API enumeration\n");
         header.write("#define get" + name + "Api() " + api + "\n");
     }
@@ -655,10 +661,12 @@ void ProtocolParser::createProtocolHeader(const QDomElement& docElem)
     // Version functions
     if(!version.isEmpty())
     {
-        header.write("\n");
+        header.makeLineSeparator();
         header.write("//! \\return the protocol version string\n");
         header.write("#define get" + name + "Version() \""  + version + "\"\n");
     }
+
+    header.makeLineSeparator();
 
     header.flush();
 
@@ -682,19 +690,19 @@ void ProtocolParser::finishProtocolHeader(void)
     header.write("// They are not auto-generated functions, but must be hand-written\n");
     header.write("\n");
     header.write("//! \\return the packet data pointer from the packet\n");
-    header.write("uint8_t* get" + name + "PacketData(" + support.pointerType + " pkt);\n");
+    header.write("uint8_t* get" + name + "PacketData(" + support.pointerType + " _pg_pkt);\n");
     header.write("\n");
     header.write("//! \\return the packet data pointer from the packet, const\n");
-    header.write("const uint8_t* get" + name + "PacketDataConst(const " + support.pointerType + " pkt);\n");
+    header.write("const uint8_t* get" + name + "PacketDataConst(const " + support.pointerType + " _pg_pkt);\n");
     header.write("\n");
     header.write("//! Complete a packet after the data have been encoded\n");
-    header.write("void finish" + name + "Packet(" + support.pointerType + " pkt, int size, uint32_t packetID);\n");
+    header.write("void finish" + name + "Packet(" + support.pointerType + " _pg_pkt, int size, uint32_t packetID);\n");
     header.write("\n");
     header.write("//! \\return the size of a packet from the packet header\n");
-    header.write("int get" + name + "PacketSize(const " + support.pointerType + " pkt);\n");
+    header.write("int get" + name + "PacketSize(const " + support.pointerType + " _pg_pkt);\n");
     header.write("\n");
     header.write("//! \\return the ID of a packet from the packet header\n");
-    header.write("uint32_t get" + name + "PacketID(const " + support.pointerType + " pkt);\n");
+    header.write("uint32_t get" + name + "PacketID(const " + support.pointerType + " _pg_pkt);\n");
     header.write("\n");
 
     header.flush();
@@ -1246,6 +1254,12 @@ void ProtocolParser::outputMarkdown(bool isBigEndian, QString inlinecss)
     if (hasAboutSection())
         filecontents += getAboutSection(isBigEndian);
 
+    // The title attribute, remove any emphasis characters. We only put this
+    // out if we have a title page, this preserves the behavior before 2.14,
+    // which did not have a title attribute
+    if(!titlePage.isEmpty())
+        file.write("Title:" + title.remove("*") + "\n\n");
+
     // Specific header-level definitions are required for LaTeX compatibility
     if (latexEnabled)
     {
@@ -1254,9 +1268,7 @@ void ProtocolParser::outputMarkdown(bool isBigEndian, QString inlinecss)
         file.write("\n");
     }
 
-    /* Add stylesheet information
-     * (unless it is disabled entirely)
-     */
+    // Add stylesheet information (unless it is disabled entirely)
     if (!nocss)
     {
         // Open the style tag
@@ -1281,8 +1293,19 @@ void ProtocolParser::outputMarkdown(bool isBigEndian, QString inlinecss)
         filecontents = temp;
     }
 
+    if(!titlePage.isEmpty())
+    {
+        QString temp = titlePage;
+        temp += "\n----------------------------\n\n";
+        temp += filecontents;
+        filecontents = temp;
+    }
+
     // Add html page breaks at each ---
     filecontents.replace("\n---", "<div class=\"page-break\"></div>\n\n\n---");
+
+    // Deal with the degrees symbol, which doesn't render in html
+    filecontents.replace("°", "&deg;");
 
     file.write(filecontents);
 
@@ -1408,6 +1431,7 @@ QString ProtocolParser::getTableOfContents(const QString& filecontents)
             refname.remove("]");
             refname.remove("`");
             refname.remove("\"");
+            refname.remove("*");
         }
 
         // Finally the actual line

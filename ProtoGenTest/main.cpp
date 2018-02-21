@@ -8,6 +8,8 @@
 #include "TelemetryPacket.h"
 #include "packetinterface.h"
 #include "linkcode.h"
+#include "compareDemolink.h"
+#include "printDemolink.h"
 
 #define PI 3.141592653589793
 #define PIf 3.141592653589793f
@@ -31,6 +33,7 @@ static int verifyVersionData(Version_t version);
 static int testZeroLengthPacket(void);
 static int testBitfieldGroupPacket(void);
 static int testMultiDimensionPacket(void);
+static int testDefaultStringsPacket(void);
 
 static int fcompare(double input1, double input2, double epsilon);
 
@@ -85,6 +88,9 @@ int main(int argc, char *argv[])
         Return = 0;
 
     if(testMultiDimensionPacket() == 0)
+        Return = 0;
+
+    if(testDefaultStringsPacket() == 0)
         Return = 0;
 
     if(Return == 1)
@@ -800,13 +806,11 @@ int testVersionPacket(void)
         return 0;
     }
 
-    for(int i = 0; i < pkt.length + 2; i++)
+    QString diff = compareVersionPacket("Version", &pkt, &pkt2);
+    if(!diff.isEmpty())
     {
-        if(((uint8_t*)&pkt)[i] != ((uint8_t*)&pkt2)[i])
-        {
-            std::cout << "Structure encoded version packet is different than parameter encoded version packet" << std::endl;
-            return 0;
-        }
+        std::cout << "Structure encoded version packet is different than parameter encoded version packet: " << diff.toStdString() << std::endl;
+        return 0;
     }
 
     memset(&version, 0, sizeof(version));
@@ -836,6 +840,26 @@ int testVersionPacket(void)
     else
     {
         std::cout << "decodeVersionPacket() failed" << std::endl;
+        return 0;
+    }
+
+    // Encode to and from text using structures
+    QString textversion = textPrintVersion_t("Version", &version);
+    memset(&version, 0, sizeof(version));
+
+    if((textReadVersion_t("Version", textversion, &version) != 17) || !verifyVersionData(version))
+    {
+        std::cout << "textPrintVersion_t() to textReadVersion_t() yielded incorrect data" << std::endl;
+        return 0;
+    }
+
+    // Encode to and from text using packets
+    textversion = textPrintVersionPacket("Testing", &pkt);
+    memset(&version, 0, sizeof(version));
+
+    if((textReadVersion_t("Testing", textversion, &version) != 17) || !verifyVersionData(version))
+    {
+        std::cout << "textPrintVersionPacket() to textReadVersion_t() yielded incorrect data" << std::endl;
         return 0;
     }
 
@@ -1048,6 +1072,61 @@ int testMultiDimensionPacket(void)
     return 1;
 
 }// testMultiDimensionPacket
+
+
+int testDefaultStringsPacket(void)
+{
+    TestWeirdStuff_t test = {0x12345678, 0, 0, "Field3", "Field4"};
+    testPacket_t pkt;
+
+    encodeTestWeirdStuffPacketStructure(&pkt, &test);
+
+    if(pkt.length != 47)
+    {
+        std::cout << "Weird stuff packet length is wrong" << std::endl;
+        return 0;
+    }
+
+    test = TestWeirdStuff_t();
+    decodeTestWeirdStuffPacketStructure(&pkt, &test);
+    if( (test.Field0 != 0x12345678) ||
+        (strcmp(test.Field3, "Field3") != 0) ||
+        (strcmp(test.Field4, "Field4") != 0))
+    {
+        std::cout << "Weird stuff packet decoded to wrong data" << std::endl;
+        return 0;
+    }
+
+    // Now test the default functions
+    test = TestWeirdStuff_t();
+    pkt.length = 40;
+    decodeTestWeirdStuffPacketStructure(&pkt, &test);
+    if(strcmp(test.Field4, "secondtest") != 0)
+    {
+        std::cout << "Weird stuff packet field4 default failed" << std::endl;
+        return 0;
+    }
+
+    test = TestWeirdStuff_t();
+    pkt.length = 39;
+    decodeTestWeirdStuffPacketStructure(&pkt, &test);
+    if(strcmp(test.Field3, "test") != 0)
+    {
+        std::cout << "Weird stuff packet field3 default failed" << std::endl;
+        return 0;
+    }
+
+    test = TestWeirdStuff_t();
+    pkt.length = 43;
+    decodeTestWeirdStuffPacketStructure(&pkt, &test);
+    if(strcmp(test.Field4, "Fi") != 0)
+    {
+        std::cout << "Weird stuff packet field4 decode failed" << std::endl;
+        return 0;
+    }
+
+    return 1;
+}
 
 
 int fcompare(double input1, double input2, double epsilon)

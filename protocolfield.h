@@ -175,6 +175,9 @@ public:
     //! Get the string used for text printing this field.
     virtual QString getTextPrintString(bool isStructureMember) const Q_DECL_OVERRIDE;
 
+    //! Get the string used for text reading this field.
+    virtual QString getTextReadString(bool isStructureMember) const Q_DECL_OVERRIDE;
+
     //! Return the string that sets this encodable to its initial value in code
     virtual QString getSetInitialValueString(bool isStructureMember) const Q_DECL_OVERRIDE;
 
@@ -194,7 +197,7 @@ public:
     virtual void clearOverridesPrevious(void) Q_DECL_OVERRIDE {overridesPrevious = false;}
 
     //! True if this encodable invalidates an earlier default
-    virtual bool invalidatesPreviousDefault(void) const Q_DECL_OVERRIDE {return !usesDefaults() && !overridesPrevious;}
+    virtual bool invalidatesPreviousDefault(void) const Q_DECL_OVERRIDE {return !inMemoryType.isNull && !usesDefaults() && !overridesPrevious;}
 
     //! True if this encodable has a direct child that uses bitfields
     virtual bool usesBitfields(void) const Q_DECL_OVERRIDE;
@@ -267,8 +270,11 @@ protected:
     //! String providing the scaler from in-Memory to encoded
     QString scalerString;
 
-    //! The string used to multiply the in-memory type to compare and print display
+    //! The string used to multiply the in-memory type to compare and print to text
     QString printScalerString;
+
+    //! The string used to divide the in-memory type to read from text
+    QString readScalerString;
 
     //! String giving the default value to use if the packet is too short
     QString defaultString;
@@ -365,7 +371,7 @@ protected:
     QString getDecodeStringForBitfield(int* bitcount, bool isStructureMember, bool defaultEnabled) const;
 
     //! Get the next lines of source needed to decode a string field
-    QString getDecodeStringForString(bool isStructureMember) const;
+    QString getDecodeStringForString(bool isStructureMember, bool defaultEnabled) const;
 
     //! Get the next lines of source needed to decode a string field
     QString getDecodeStringForStructure(bool isStructureMember) const;
