@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 
-<Protocol name="Demolink" title="Demonstration of protogen" prefix="" file="linkcode" mapfile="map/mapDemolink" comparefile="compare/compareDemolink" printfile="compare/printDemolink" verifyfile="definitions/verify" pointer="testPacket_t" maxSize="1000" api="1" version="1.0.0.a" endian="little" supportLongBitfield="true" bitfieldTest="true" comment=
+<Protocol name="Demolink" title="Demonstration of protogen" prefix="" file="linkcode" mapfile="map/mapDemolink" comparefile="compare/compareDemolink" printfile="compare/printDemolink" verifyfile="definitions/verify" pointer="testPacket_t" maxSize="1000" api="1" version="1.0.0.a" endian="little" supportBool="true" supportLongBitfield="true" bitfieldTest="true" comment=
 "This is an demonstration protocol definition. This file demonstrates most things
 that the ProtoGen application can do regarding automatic protocol packing/upacking
 code generation.
@@ -92,12 +92,8 @@ efficiently encode data for little or big endian architectures.">
 
     <Packet name="GPS" file="GPS" useInOtherPackets="true" comment="Information from a GPS including the position, velocity, and quality data.
                                            This is a generic GPS description that should suffice for most GPS devices">
-
-        <Structure name="PositionLLA" comment="Position in latitude, longitude, and altitude with respect to the WGS-84 ellipsoid">
-            <Data name="latitude" inMemoryType="float64" encodedType="signed32" max="pi/2" comment="The latitude of the position in radians, positive North"/>
-            <Data name="longitude" inMemoryType="float64" encodedType="signed32" max="pi" comment="The longitude of the position in radians, positive East"/>
-            <Data name="altitude" inMemoryType="float64" encodedType="unsigned24" min="-1000" scaler="1000" comment="The altitude above the WGS-84 ellipsoid of the position in meters"/>
-        </Structure>
+		
+		<Data name="PosLLA" struct="PositionLLA" comment="Position in geographic coordinates with respect to the WGS-84 ellipsoid"/>
 
         <Structure name="VelocityNED" comment="Velocity in North, East, Down">
             <Data name="north" inMemoryType="float32" encodedType="signed16" scaler="100" comment="velocity in the North direction"/>
@@ -114,10 +110,10 @@ efficiently encode data for little or big endian architectures.">
             <Data name="elevation" inMemoryType="float32" encodedType="signed8" max="pi" printscaler="180/pi" comment="elevation angle of the satellite in radians"/>
             <Data name="azimuth" inMemoryType="float32" encodedType="signed8" max="pi" printscaler="180/pi" comment="azimuth angle of the satellite in radians"/>
             <Data name="CNo" inMemoryType="unsigned8" array="NUM_GPS_BANDS" comment="Carrier to noise ratio in dB-Hz for each GPS frequency"/>
-            <Data name="visible" inMemoryType="bitfield1" comment="Set if the satellite should be visible"/>
-            <Data name="tracked" inMemoryType="bitfield1" comment="Set if the satellite is tracked"/>
-            <Data name="healthy" inMemoryType="bitfield1" comment="Set if the satellite is reporting itself as health"/>
-            <Data name="used" inMemoryType="bitfield1" comment="Set if the satellite is used in the current PVT solution"/>
+            <Data name="visible" inMemoryType="bool" encodedType="bitfield1" comment="Set if the satellite should be visible"/>
+            <Data name="tracked" inMemoryType="bool" encodedType="bitfield1" comment="Set if the satellite is tracked"/>
+            <Data name="healthy" inMemoryType="bool" encodedType="bitfield1" comment="Set if the satellite is reporting itself as health"/>
+            <Data name="used" inMemoryType="bool" encodedType="bitfield1" comment="Set if the satellite is used in the current PVT solution"/>
         </Structure>
 
     </Packet>
@@ -142,6 +138,7 @@ efficiently encode data for little or big endian architectures.">
         <Data name="Field2" inMemoryType="float32" default="0" encodedType="signed16" max="pi"/>
         <Data name="Field3" inMemoryType="fixedstring" array="32" default="test"/>
         <Data name="Field4" inMemoryType="string" array="32" default="secondtest"/>
+        <Data name="Field5" inMemoryType="bool" array="4" array2d="3" encodedType="unsigned16" default="false"/>
     </Packet>
 
     <Packet name="MultiDimensionTable" ID="MULTIDIMENSIONTABLE">
@@ -189,6 +186,7 @@ efficiently encode data for little or big endian architectures.">
             straight line, or a linearly interpolated table with up to 10 points.">
         
         <Data name="numCurvePoints" inMemoryType="bitfield4" initialValue="0" verifyMinValue="auto" verifyMaxValue="10" comment="Number of points in the throttle curve"/>
+        <!-- Enable this to demonstrate the bug I need to fix <Code name="CodeShouldNotInterruptBitFields" encode=";"/> -->
         <Data name="reserved" inMemoryType="null" constant="0" encodedType="bitfield27"/>
         <Data name="enableCurve" inMemoryType="bitfield1" initialValue="0" comment="Set to enable the throttle curve"/>
         
@@ -257,9 +255,8 @@ efficiently encode data for little or big endian architectures.">
         <Data inMemoryType="null" array="N3D" encodedType="unsigned8"
               comment="Reserve an array for future expansion"/>
         <Data name="magIncluded" inMemoryType="bitfield1" comment="set if magnetometer data are included in this packet"/>
-        <Data name="laserIncluded" inMemoryType="bitfield1" comment="set if laser range finder data are included in this packet"/>
+        <Data name="laserStatus" inMemoryType="bitfield3" comment="set if laser range finder data are included in this packet"/>
         <Data name="airDataIncluded" inMemoryType="bitfield1" comment="set if air data are included in this packet"/>
-        <Data inMemoryType="null" encodedType="bitfield2" comment="Bits reserved for future use"/>
         <Data name="insMode" enum="insMode_t" encodedType="bitfield3" comment="The operational mode of the INS"/>
         <Data name="numGPSs" inMemoryType="uint8_t" comment="number of GPS sources"/>
         <Data name="gpsData" struct="GPS" array="3" variableArray="numGPSs" comment="Information from all possible GPS systems"/>
@@ -273,8 +270,8 @@ efficiently encode data for little or big endian architectures.">
         <Data name="staticP" inMemoryType="float" dependsOn="airDataIncluded" encodedType="uint16_t" max="115000" comment="Static pressure in Pascals"/>
         <Data name="OAT" inMemoryType="float" dependsOn="airDataIncluded" encodedType="uint8_t" min="200" max="400" comment="Outside air temperature in Kelvin"/>
         <Data name="mag" inMemoryType="float" array="N3D" dependsOn="magIncluded" encodedType="int16_t" max="100000" comment="magnetic field in nanoTesla in body X, Y, Z"/>
-        <Data name="compassHeading" inMemoryType="float" dependsOn="magIncluded" encodedType="int16_t" max="3.15" default="pi/2" comment="True heading computed by magnetic field in radians"/>
-        <Data name="laserAGL" inMemoryType="float" dependsOn="laserIncluded" encodedType="uint16_t" min="-5" max="145" default="10" comment="Altitude above ground in meters as measured by the laser altimeter"/>
+        <Data name="compassHeading" inMemoryType="float" dependsOn="magIncluded" dependsOnValue="1" encodedType="int16_t" max="3.15" default="pi/2" comment="True heading computed by magnetic field in radians"/>
+        <Data name="laserAGL" inMemoryType="float" dependsOn="laserStatus" dependsOnValue="3" dependsOnCompare="&lt;=" encodedType="uint16_t" min="-5" max="145" default="10" comment="Altitude above ground in meters as measured by the laser altimeter"/>
         <Data name="dynamicP" inMemoryType="override" encodedType="float32"/>
         <Data name="fuel" inMemoryType="override" encodedType="float24"/>
 

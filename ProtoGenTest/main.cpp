@@ -206,7 +206,7 @@ int testTelemetryPacket(void)
     telemetry.staticP = 101325;
     telemetry.dynamicP = 254;
 
-    telemetry.laserIncluded = 1;
+    telemetry.laserStatus = 1;
     telemetry.laserAGL = 131.256f;
 
     telemetry.magIncluded = 1;
@@ -299,7 +299,7 @@ int verifyTelemetryData(Telemetry_t telemetry)
     if(fcompare(telemetry.staticP, 101325.0f, 115000.0/65536.0)) return 0;
     if(fcompare(telemetry.dynamicP, 254.0f, 16200/65536.0)) return 0;
 
-    if(telemetry.laserIncluded != 1) return 0;
+    if(telemetry.laserStatus != 1) return 0;
     if(fcompare(telemetry.laserAGL, 131.256, 150/65536.0)) return 0;
 
     // We don't test this one because we do both cases
@@ -609,22 +609,22 @@ void fillOutGPSTest(GPS_t& gps)
     gps.ITOW = ((((5*24) + 11)*60 + 32)*60 + 59)*1000 + 251;
     gps.Week = 1234;
     gps.PDOP = -2.13f;
-    gps.PositionLLA.altitude = 169.4;
-    gps.PositionLLA.latitude = deg2rad(45.6980142);
-    gps.PositionLLA.longitude = deg2rad(-121.5618339);
+    gps.PosLLA.altitude = 169.4;
+    gps.PosLLA.latitude = deg2rad(45.6980142);
+    gps.PosLLA.longitude = deg2rad(-121.5618339);
     gps.VelocityNED.north = 23.311f;
     gps.VelocityNED.east = -42.399f;
     gps.VelocityNED.down = -.006f;
     gps.numSvInfo = 5;
     gps.svInfo[0].azimuth = deg2radf(91);
     gps.svInfo[0].elevation = deg2radf(77);
-    gps.svInfo[0].healthy = 1;
     gps.svInfo[0].CNo[GPS_BAND_L1] = 50;
     gps.svInfo[0].CNo[GPS_BAND_L2] = 33;
     gps.svInfo[0].PRN = 12;
-    gps.svInfo[0].tracked = 1;
-    gps.svInfo[0].used = 1;
-    gps.svInfo[0].visible = 1;
+    gps.svInfo[0].healthy = true;
+    gps.svInfo[0].tracked = true;
+    gps.svInfo[0].used = true;
+    gps.svInfo[0].visible = true;
 
     // Just replicate the data
     gps.svInfo[1] = gps.svInfo[2] = gps.svInfo[3] = gps.svInfo[0];
@@ -648,22 +648,22 @@ int verifyGPSData(GPS_t gps)
     if(gps.ITOW != ((((5*24) + 11)*60 + 32)*60 + 59)*1000 + 251) return 0;
     if(gps.Week != 1234) return 0;
     if(fcompare(gps.PDOP, 0, 0.1)) return 0;
-    if(fcompare(gps.PositionLLA.altitude, 169.4, 1.0/1000)) return 0;
-    if(fcompare(gps.PositionLLA.latitude, deg2rad(45.6980142), 1.0/1367130551.152863)) return 0;
-    if(fcompare(gps.PositionLLA.longitude, deg2rad(-121.5618339), 1.0/683565275.2581217)) return 0;
+    if(fcompare(gps.PosLLA.altitude, 169.4, 1.0/1000)) return 0;
+    if(fcompare(gps.PosLLA.latitude, deg2rad(45.6980142), 1.0/1367130551.152863)) return 0;
+    if(fcompare(gps.PosLLA.longitude, deg2rad(-121.5618339), 1.0/683565275.2581217)) return 0;
     if(fcompare(gps.VelocityNED.north, 23.311, 1.0/100)) return 0;
     if(fcompare(gps.VelocityNED.east, -42.399, 1.0/100)) return 0;
     if(fcompare(gps.VelocityNED.down, -.006, 1.0/100)) return 0;
     if(gps.numSvInfo != 5) return 0;
     if(fcompare(gps.svInfo[0].azimuth, deg2rad(91), 1.0/40.42535554534142)) return 0;
     if(fcompare(gps.svInfo[0].elevation, deg2rad(77), 1.0/40.42535554534142)) return 0;
-    if(gps.svInfo[0].healthy != 1) return 0;
     if(gps.svInfo[0].CNo[GPS_BAND_L1] != 50) return 0;
     if(gps.svInfo[0].CNo[GPS_BAND_L2] != 33) return 0;
     if(gps.svInfo[0].PRN != 12) return 0;
-    if(gps.svInfo[0].tracked != 1) return 0;
-    if(gps.svInfo[0].used != 1) return 0;
-    if(gps.svInfo[0].visible != 1) return 0;
+    if(gps.svInfo[0].healthy != true) return 0;
+    if(gps.svInfo[0].tracked != true) return 0;
+    if(gps.svInfo[0].used != true) return 0;
+    if(gps.svInfo[0].visible != true) return 0;
 
     if(fcompare(gps.svInfo[1].azimuth, deg2rad(-179.99), 1.0/40.42535554534142)) return 0;
     if(fcompare(gps.svInfo[1].elevation, deg2rad(-23), 1.0/40.42535554534142)) return 0;
@@ -1083,7 +1083,7 @@ int testDefaultStringsPacket(void)
 
     encodeTestWeirdStuffPacketStructure(&pkt, &test);
 
-    if(pkt.length != 47)
+    if(pkt.length != 47 + 2*3*4)
     {
         std::cout << "Weird stuff packet length is wrong" << std::endl;
         return 0;

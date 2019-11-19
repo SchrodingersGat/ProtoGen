@@ -90,6 +90,12 @@ void ProtocolStructureModule::issueWarnings(const QDomNamedNodeMap& map)
         dependsOn.clear();
     }
 
+    if(!dependsOnValue.isEmpty())
+    {
+        emitWarning("dependsOnValue makes no sense for a top level object");
+        dependsOnValue.clear();
+    }
+
 }// ProtocolStructureModule::issueWarnings
 
 
@@ -252,6 +258,9 @@ void ProtocolStructureModule::setupFiles(QString moduleName,
         source.setModuleNameAndPath(moduleName, support.outputpath);
     }
 
+    if(support.supportbool)
+        header.writeIncludeDirective("stdbool.h", "", true);
+
     if(verifymodulename.isEmpty())
         verifymodulename = support.globalVerifyName;
 
@@ -259,6 +268,9 @@ void ProtocolStructureModule::setupFiles(QString moduleName,
     {
         verifyHeader.setModuleNameAndPath(verifymodulename, support.outputpath);
         verifySource.setModuleNameAndPath(verifymodulename, support.outputpath);
+
+        if(support.supportbool)
+            verifyHeader.writeIncludeDirective("stdbool.h", "", true);
 
         verifyheaderfile = &verifyHeader;
         verifysourcefile = &verifySource;
@@ -390,9 +402,11 @@ void ProtocolStructureModule::setupFiles(QString moduleName,
     else if(!defheadermodulename.isEmpty())
     {
         // Handle the idea that the structure might be defined in a different file
-
         defheader.setLicenseText(support.licenseText);
         defheader.setModuleNameAndPath(defheadermodulename, support.outputpath);
+
+        if(support.supportbool)
+            defheader.writeIncludeDirective("stdbool.h", "", true);
 
         if(defheader.isAppending())
             defheader.makeLineSeparator();
@@ -416,15 +430,30 @@ void ProtocolStructureModule::setupFiles(QString moduleName,
     printHeader.writeIncludeDirective(structfile->fileName());
     printHeader.writeIncludeDirective(header.fileName());
     printHeader.writeIncludeDirective("QString", QString(), true, false);
+    mapHeader.writeIncludeDirective(structfile->fileName());
     mapHeader.writeIncludeDirective(header.fileName());
     mapHeader.writeIncludeDirective("QVariant", QString(), true, false);
     mapHeader.writeIncludeDirective("string", QString(), true, false);
 
     // The verification details may be spread across multiple files
     QStringList list;
-    for(int i = 0; i < encodables.length(); i++)
-        encodables[i]->getInitAndVerifyIncludeDirectives(list);
+    getInitAndVerifyIncludeDirectives(list);
     verifyheaderfile->writeIncludeDirectives(list);
+
+    // The compare details may be spread across multiple files
+    list.clear();
+    getCompareIncludeDirectives(list);
+    compareHeader.writeIncludeDirectives(list);
+
+    // The print details may be spread across multiple files
+    list.clear();
+    getPrintIncludeDirectives(list);
+    printHeader.writeIncludeDirectives(list);
+
+    // The map details may be spread across multiple files
+    list.clear();
+    getMapIncludeDirectives(list);
+    mapHeader.writeIncludeDirectives(list);
 
     // Add other includes specific to this structure
     parser->outputIncludes(getHierarchicalName(), *structfile, e);
@@ -504,11 +533,14 @@ void ProtocolStructureModule::setupFiles(QString moduleName,
  */
 void ProtocolStructureModule::getIncludeDirectives(QStringList& list) const
 {
+    // Our header
     list.append(structfile->fileName());
     list.append(header.fileName());
 
+    // And any of our children's headers
     ProtocolStructure::getIncludeDirectives(list);
 
+    list.removeDuplicates();
 }
 
 
@@ -523,6 +555,54 @@ void ProtocolStructureModule::getInitAndVerifyIncludeDirectives(QStringList& lis
 
     // And any of our children's headers
     ProtocolStructure::getInitAndVerifyIncludeDirectives(list);
+
+    list.removeDuplicates();
+}
+
+
+/*!
+ * Return the include directives needed for this encodable's map functions
+ * \param list is appended with any directives this encodable requires.
+ */
+void ProtocolStructureModule::getMapIncludeDirectives(QStringList& list) const
+{
+    // Our verify header
+    list.append(mapHeader.fileName());
+
+    // And any of our children's headers
+    ProtocolStructure::getMapIncludeDirectives(list);
+
+    list.removeDuplicates();
+}
+
+
+/*!
+ * Return the include directives needed for this encodable's compare functions
+ * \param list is appended with any directives this encodable requires.
+ */
+void ProtocolStructureModule::getCompareIncludeDirectives(QStringList& list) const
+{
+    // Our verify header
+    list.append(compareHeader.fileName());
+
+    // And any of our children's headers
+    ProtocolStructure::getCompareIncludeDirectives(list);
+
+    list.removeDuplicates();
+}
+
+
+/*!
+ * Return the include directives needed for this encodable's print functions
+ * \param list is appended with any directives this encodable requires.
+ */
+void ProtocolStructureModule::getPrintIncludeDirectives(QStringList& list) const
+{
+    // Our verify header
+    list.append(printHeader.fileName());
+
+    // And any of our children's headers
+    ProtocolStructure::getPrintIncludeDirectives(list);
 
     list.removeDuplicates();
 }
@@ -739,7 +819,7 @@ QString ProtocolStructureModule::getExtractTextFunction(void)
 {
     return QString("\
 //! Extract text that is identified by a key\n\
-QString extractText(const QString& key, const QString& source);\n\
+static QString extractText(const QString& key, const QString& source, int* fieldcount);\n\
 \n\
 /*!\n\
  * Extract text that is identified by a key\n\

@@ -58,6 +58,15 @@ public:
     //! Return the include directives needed for this encodable's init and verify functions
     virtual void getInitAndVerifyIncludeDirectives(QStringList& list) const {Q_UNUSED(list);}
 
+    //! Return the include directives needed for this encodable's map functions
+    virtual void getMapIncludeDirectives(QStringList& list) const {Q_UNUSED(list);}
+
+    //! Return the include directives needed for this encodable's compare functions
+    virtual void getCompareIncludeDirectives(QStringList& list) const {Q_UNUSED(list);}
+
+    //! Return the include directives needed for this encodable's print functions
+    virtual void getPrintIncludeDirectives(QStringList& list) const {Q_UNUSED(list);}
+
     //! Return the string that declares the whole structure
     virtual QString getStructureDeclaration(bool alwaysCreate) const {Q_UNUSED(alwaysCreate); return QString();}
 
@@ -216,6 +225,8 @@ public:
     QString variableArray;  //!< variable that gives the length of the array in a packet
     QString variable2dArray;//!< variable that gives the length of the 2nd array dimension in a packet
     QString dependsOn;      //!< variable that determines if this field is present
+    QString dependsOnValue; //!< String providing the details of the depends on value
+    QString dependsOnCompare;//!< Comparison to use for dependsOnValue
     EncodedLength encodedLength;    //!< The lengths of the encodables
 };
 
