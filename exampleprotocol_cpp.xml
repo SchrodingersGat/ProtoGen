@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 
-<Protocol name="Demolink" title="Demonstration of protogen" prefix="" file="linkcode" mapfile="map/mapDemolink" comparefile="compare/compareDemolink" printfile="compare/printDemolink" verifyfile="definitions/verify" pointer="testPacket_t" maxSize="1000" api="1" version="1.0.0.a" endian="little" supportBool="true" supportLongBitfield="true" bitfieldTest="true" comment=
+<Protocol name="Demolink" title="Demonstration of protogen" prefix="" typeSuffix="_c" file="linkcode" cpp="true" compare="true" print="true" map="true" pointer="testPacket_c" maxSize="1000" api="1" version="1.0.0.a" endian="little" supportLongBitfield="true" bitfieldTest="true" comment=
 "This is an demonstration protocol definition. This file demonstrates most things
 that the ProtoGen application can do regarding automatic protocol packing/upacking
 code generation.
@@ -42,7 +42,7 @@ efficiently encode data for little or big endian architectures.">
         <Value name="N3D"/>
     </Enum>
 
-    <Require file="dependson.xml"/>
+    <Require file="dependson_cpp.xml"/>
 
     <!-- This is now part of the dependon.xml file
     <Enum name="GPSConstants" file="globalenum" comment="Constants used with GPS systems">
@@ -186,7 +186,7 @@ efficiently encode data for little or big endian architectures.">
 
     </Packet>
 
-    <Packet name="ThrottleSettings" file="Engine" deffile="definitions/EngineDefinitions.hpp" ID="THROTTLESETTINGS"
+    <Packet name="ThrottleSettings" file="Engine" deffile="EngineDefinitions.hpp" ID="THROTTLESETTINGS"
             comment="Change the throttle control settings. The engine control
             laws output a throttle command signal from 0 to 1. The data in this
             packet are used to determine what pulse width to send to the servo 
@@ -213,13 +213,13 @@ efficiently encode data for little or big endian architectures.">
         
     </Packet>
             
-    <Structure name="Date" deffile="OtherDefinitions" verifyfile="verify/dateverify" comment="Calendar date information">
+    <Structure name="Date" deffile="OtherDefinitions" comment="Calendar date information">
         <Data name="year" inMemoryType="unsigned16" verifyMinValue="2000" min="2000" comment="year of the date"/>
         <Data name="month" inMemoryType="unsigned8" verifyMaxValue="12" comment="month of the year, from 1 to 12"/>
         <Data name="day" inMemoryType="unsigned8" verifyMaxValue="31" comment="day of the month, from 1 to 31"/>
     </Structure>
     
-    <Structure name="smallDate" redefine="Date" deffile="OtherDefinitions" verifyfile="verify/dateverify" comment="Calendar date information">
+    <Structure name="smallDate" redefine="Date" deffile="OtherDefinitions" comment="Calendar date information">
         <Data name="year" inMemoryType="unsigned16" encodedType="bitfield7" min="2000" comment="year of the date"/>
         <Data name="month" inMemoryType="unsigned8" encodedType="bitfield4" comment="month of the year, from 1 to 12"/>
         <Data name="day" inMemoryType="unsigned8" encodedType="bitfield5" comment="day of the month, from 1 to 31"/>

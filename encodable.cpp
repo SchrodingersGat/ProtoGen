@@ -5,14 +5,10 @@
 #include "protocoldocumentation.h"
 #include "protocolparser.h"
 
-// Initialize convenience strings
-const QString Encodable::VOID_ENCODE = "void encode";
-const QString Encodable::INT_DECODE = "int decode";
-
 /*!
  * Constructor for encodable
  */
-Encodable::Encodable(ProtocolParser* parse, QString Parent, ProtocolSupport supported) :
+Encodable::Encodable(ProtocolParser* parse, const std::string& Parent, ProtocolSupport supported) :
     ProtocolDocumentation(parse, Parent, supported)
 {
 }
@@ -24,85 +20,85 @@ Encodable::Encodable(ProtocolParser* parse, QString Parent, ProtocolSupport supp
  */
 void Encodable::checkAgainstKeywords(void)
 {
-    if(keywords.contains(name))
+    if(contains(keywords, name, true))
     {
         emitWarning("name matches C keyword, changed to _name");
         name = "_" + name;
     }
 
-    if(keywords.contains(array))
+    if(contains(keywords, array, true))
     {
         emitWarning("array matches C keyword, changed to _array");
         array = "_" + array;
     }
 
-    if(keywords.contains(variableArray))
+    if(contains(keywords, variableArray, true))
     {
         emitWarning("variableArray matches C keyword, changed to _variableArray");
         variableArray = "_" + variableArray;
     }
 
-    if(keywords.contains(array2d))
+    if(contains(keywords, array2d, true))
     {
         emitWarning("array2d matches C keyword, changed to _array2d");
         array2d = "_" + array2d;
     }
 
-    if(keywords.contains(variable2dArray))
+    if(contains(keywords, variable2dArray, true))
     {
         emitWarning("variable2dArray matches C keyword, changed to _variable2dArray");
         variable2dArray = "_" + variable2dArray;
     }
 
-    if(keywords.contains(dependsOn))
+    if(contains(keywords, dependsOn, true))
     {
         emitWarning("dependsOn matches C keyword, changed to _dependsOn");
         dependsOn = "_" + dependsOn;
     }
 
-    if(keywords.contains(dependsOnValue))
+    if(contains(keywords, dependsOnValue, true))
     {
         emitWarning("dependsOnValue matches C keyword, changed to _dependsOnValue");
         dependsOnValue = "_" + dependsOnValue;
     }
 
-    if(variablenames.contains(name))
+    if(contains(variablenames, name, true))
     {
         emitWarning("name matches ProtoGen variable, changed to _name");
         name = "_" + name;
     }
 
-    if(variablenames.contains(array))
+    if(contains(variablenames, array, true))
     {
         emitWarning("array matches ProtoGen variable, changed to _array");
         array = "_" + array;
     }
 
-    if(variablenames.contains(variableArray))
+    if(contains(variablenames, variableArray, true))
     {
         emitWarning("variableArray matches ProtoGen variable, changed to _variableArray");
         variableArray = "_" + variableArray;
     }
 
-    if(variablenames.contains(array2d))
+    if(contains(variablenames, array2d, true))
     {
         emitWarning("array2d matches ProtoGen variable, changed to _array2d");
         array2d = "_" + array2d;
     }
 
-    if(variablenames.contains(variable2dArray))
+    if(contains(variablenames, variable2dArray, true))
     {
         emitWarning("variable2dArray matches ProtoGen variable, changed to _variable2dArray");
         variable2dArray = "_" + variable2dArray;
     }
 
-    if(variablenames.contains(dependsOn))
+    if(contains(variablenames, dependsOn, true))
     {
         emitWarning("dependsOn matches ProtoGen variable, changed to _dependsOn");
         dependsOn = "_" + dependsOn;
     }
 
-    if(variablenames.contains(dependsOnValue))
+    if(contains(variablenames, dependsOnValue, true))
     {
         emitWarning("dependsOnValue matches ProtoGen variable, changed to _dependsOnValue");
         dependsOnValue = "_" + dependsOnValue;
@@ -137,7 +133,7 @@ void Encodable::clear(void)
  * the function signature.
  * \return the string that provides this fields encode function signature
  */
-QString Encodable::getEncodeSignature(void) const
+std::string Encodable::getEncodeSignature(void) const
 {
     if(isNotEncoded() || isNotInMemory() || isConstant())
         return "";
@@ -158,7 +154,7 @@ QString Encodable::getEncodeSignature(void) const
  * the function signature.
  * \return the string that provides this fields decode function signature
  */
-QString Encodable::getDecodeSignature(void) const
+std::string Encodable::getDecodeSignature(void) const
 {
     if(isNotEncoded() || isNotInMemory())
         return "";
@@ -176,7 +172,7 @@ QString Encodable::getDecodeSignature(void) const
  * The string starts with " * " and ends with a linefeed
  * \return the string that povides the parameter documentation
  */
-QString Encodable::getEncodeParameterComment(void) const
+std::string Encodable::getEncodeParameterComment(void) const
 {
     if(isNotEncoded() || isNotInMemory() || isConstant())
         return "";
@@ -190,7 +186,7 @@ QString Encodable::getEncodeParameterComment(void) const
  * The string starts with " * " and ends with a linefeed
  * \return the string that povides the parameter documentation
  */
-QString Encodable::getDecodeParameterComment(void) const
+std::string Encodable::getDecodeParameterComment(void) const
 {
     if(isNotEncoded() || isNotInMemory())
         return "";
@@ -200,30 +196,266 @@ QString Encodable::getDecodeParameterComment(void) const
 
 
 /*!
+ * Get a positive or negative return code string, which is language specific
+ * \param positive should be true for "1" or "true", else "0", or "false"
+ * \return The string in code that is the return.
+ */
+std::string Encodable::getReturnCode(bool positive) const
+{
+    if(positive)
+    {
+        if(support.language == ProtocolSupport::c_language)
+            return "1";
+        else
+            return "true";
+    }
+    else
+    {
+        if(support.language == ProtocolSupport::c_language)
+            return "0";
+        else
+            return "false";
+    }
+
+}// Encodable::getReturnCode
+
+
+/*!
+ * Get the string which accessses this field in code in a encoding context.
+ * \param isStructureMember true if this field is in the scope of a containing structure.
+ * \return The string that accesses this field in code for reading.
+ */
+std::string Encodable::getEncodeFieldAccess(bool isStructureMember) const
+{
+    return getEncodeFieldAccess(isStructureMember, name);
+
+}// ProtocolField::getEncodeFieldAccess
+
+
+/*!
+ * Get the string which accessses this field in code in a encoding context.
+ * \param isStructureMember true if this field is in the scope of a containing structure.
+ * \param variable is the name of the variable to be accessed.
+ * \return The string that accesses the variable in code for reading.
+ */
+std::string Encodable::getEncodeFieldAccess(bool isStructureMember, const std::string& variable) const
+{
+    std::string access;
+
+    // How we are going to access the field
+    if(isStructureMember)
+    {
+        if(support.language == ProtocolSupport::c_language)
+            access = "_pg_user->" + variable; // Access via structure pointer
+        else
+            access = variable;                // Access via implicit class reference
+    }
+    else
+        access = variable;                    // Access via parameter
+
+    // If the variable we are tyring to access is ourselves (i.e. not dependsOn
+    // or variableArray, etc.) then we need to apply array access rules also.
+    if(variable == name)
+    {
+        if(isArray() && !isString())
+        {
+            access += "[_pg_i]";
+            if(is2dArray())
+                access += "[_pg_j]";
+        }
+
+        // If we are a structure, and the language is C, we need the address of
+        // the structure, even for encoding. Note however that if we are a
+        // parameter we are already a pointer (because we never pass structures
+        // by value).
+        if(!isPrimitive() && (support.language == ProtocolSupport::c_language) && (isStructureMember || isArray()))
+            access = "&" + access;
+    }
+
+    return access;
+
+}// Encodable::getEncodeFieldAccess
+
+
+/*!
+ * Get the string which accessses this field in code in a decoding context.
+ * \param isStructureMember true if this field is in the scope of a containing structure.
+ * \return The string that accesses this field in code for writing.
+ */
+std::string Encodable::getDecodeFieldAccess(bool isStructureMember) const
+{
+    return getDecodeFieldAccess(isStructureMember, name);
+}
+
+
+/*!
+ * Get the string which accessses this field in code in a decoding context.
+ * \param isStructureMember true if this field is in the scope of a containing structure.
+ * \param variable is the name of the variable to be accessed.
+ * \return The string that accesses this field in code for writing.
+ */
+std::string Encodable::getDecodeFieldAccess(bool isStructureMember, const std::string& variable) const
+{
+    std::string access;
+
+    if(isStructureMember)
+    {
+        if(support.language == ProtocolSupport::c_language)
+            access = "_pg_user->" + variable; // Access via structure pointer
+        else
+            access = variable;                // Access via implicit class reference
+
+        if(variable == name)
+        {
+            // Apply array access rules also, strings are left alone, they are already pointers
+            if(isArray() && !isString())
+            {
+                access += "[_pg_i]";          // Array de-reference
+                if(is2dArray())
+                    access += "[_pg_j]";
+
+            }
+
+            // If we are a structure, and the language is C, we need the address of the structure.
+            if(!isPrimitive() && (support.language == ProtocolSupport::c_language))
+                access = "&" + access;
+        }
+    }
+    else
+    {
+        if(variable == name)
+        {
+            if(isString())
+                access = variable;                // Access via string pointer
+            else if(isArray())
+            {
+                access = variable + "[_pg_i]";    // Array de-reference
+                if(is2dArray())
+                    access += "[_pg_j]";
+
+                // If we are a structure, and the language is C, we need the address of the structure.
+                if(!isPrimitive() && (support.language == ProtocolSupport::c_language))
+                    access = "&" + access;
+            }
+            else if(!isPrimitive())
+                access = variable;
+            else
+                access = "(*" + variable + ")";   // Access via parameter pointer
+        }
+        else
+            access = "(*" + variable + ")";       // Access via parameter pointer
+    }
+
+    return access;
+
+}// Encodable::getDecodeFieldAccess
+
+
+/*!
+ * Get the code that performs array iteration, in a encode context
+ * \param spacing is the spacing that begins the first array iteration line
+ * \param isStructureMember should be true if variable array limits are members of a structure
+ * \return the code for array iteration, which may be empty
+ */
+std::string Encodable::getEncodeArrayIterationCode(const std::string& spacing, bool isStructureMember) const
+{
+    std::string output;
+
+    if(isArray())
+    {
+        if(variableArray.empty())
+        {
+            output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
+        }
+        else
+        {
+            output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)" + getEncodeFieldAccess(isStructureMember, variableArray) + " && _pg_i < " + array + "; _pg_i++)\n";
+        }
+
+        if(is2dArray())
+        {
+            if(variable2dArray.empty())
+            {
+                output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
+            }
+            else
+            {
+                output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < (unsigned)" + getEncodeFieldAccess(isStructureMember, variable2dArray) + " && _pg_j < " + array2d + "; _pg_j++)\n";
+            }
+        }
+
+    }
+
+    return output;
+
+}// Encodable::getEncodeArrayIterationCode
+
+
+/*!
+ * Get the code that performs array iteration, in a decode context
+ * \param spacing is the spacing that begins the first array iteration line
+ * \param isStructureMember should be true if variable array limits are members of a structure
+ * \return the code for array iteration, which may be empty
+ */
+std::string Encodable::getDecodeArrayIterationCode(const std::string& spacing, bool isStructureMember) const
+{
+    std::string output;
+
+    if(isArray())
+    {
+        if(variableArray.empty())
+        {
+            output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
+        }
+        else
+        {
+            output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)" + getDecodeFieldAccess(isStructureMember, variableArray) + " && _pg_i < " + array + "; _pg_i++)\n";
+        }
+
+        if(is2dArray())
+        {
+            if(variable2dArray.empty())
+            {
+                output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
+            }
+            else
+            {
+                output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < (unsigned)" + getDecodeFieldAccess(isStructureMember, variable2dArray) + " && _pg_j < " + array2d + "; _pg_j++)\n";
+            }
+        }
+
+    }
+
+    return output;
+
+}// Encodable::getDecodeArrayIterationCode
+
+
+/*!
  * Get documentation repeat details for array or 2d arrays
  * \return The repeat details
  */
-QString Encodable::getRepeatsDocumentationDetails(void) const
+std::string Encodable::getRepeatsDocumentationDetails(void) const
 {
-    QString repeats = "1";
-    QString arrayLink;
-    QString array2dLink;
-    QString variableArrayLink;
-    QString variable2dArrayLink;
+    std::string repeats = "1";
+    std::string arrayLink;
+    std::string array2dLink;
+    std::string variableArrayLink;
+    std::string variable2dArrayLink;
 
     if(isArray())
     {
         arrayLink = parser->getEnumerationNameForEnumValue(array);
 
-        if(arrayLink.isEmpty())
+        if(arrayLink.empty())
             arrayLink = array;
         else
             arrayLink = "["+array+"](#"+arrayLink+")";
 
-        if(variableArray.isEmpty())
+        if(variableArray.empty())
             variableArrayLink = parser->getEnumerationNameForEnumValue(variableArray);
 
-        if(variableArrayLink.isEmpty())
+        if(variableArrayLink.empty())
             variableArrayLink = variableArray;
         else
             variableArrayLink = "["+variableArray+"](#"+variableArrayLink+")";
@@ -233,15 +465,15 @@ QString Encodable::getRepeatsDocumentationDetails(void) const
     {
         array2dLink = parser->getEnumerationNameForEnumValue(array2d);
 
-        if(array2dLink.isEmpty())
+        if(array2dLink.empty())
             array2dLink = array2d;
         else
             array2dLink = "["+array2d+"](#"+array2dLink+")";
 
-        if(variable2dArray.isEmpty())
+        if(variable2dArray.empty())
             variable2dArrayLink = parser->getEnumerationNameForEnumValue(variable2dArray);
 
-        if(variable2dArrayLink.isEmpty())
+        if(variable2dArrayLink.empty())
             variable2dArrayLink = variable2dArray;
         else
             variable2dArrayLink = "["+variable2dArray+"](#"+variable2dArrayLink+")";
@@ -249,14 +481,14 @@ QString Encodable::getRepeatsDocumentationDetails(void) const
 
     if(is2dArray())
     {
-        if(variableArray.isEmpty() && variable2dArray.isEmpty())
+        if(variableArray.empty() && variable2dArray.empty())
             repeats = arrayLink+"*"+array2dLink;
         else
             repeats = variableArrayLink+"*"+variable2dArrayLink + ", up to " + arrayLink+"*"+array2dLink;
     }
     else if(isArray())
     {
-        if(variableArray.isEmpty())
+        if(variableArray.empty())
             repeats = arrayLink;
         else
             repeats = variableArrayLink + ", up to " + arrayLink;
@@ -277,16 +509,21 @@ QString Encodable::getRepeatsDocumentationDetails(void) const
  * \return a pointer to a newly allocated encodable. The caller is
  *         responsible for deleting this object.
  */
-Encodable* Encodable::generateEncodable(ProtocolParser* parse, QString Parent, ProtocolSupport supported, const QDomElement& field)
+Encodable* Encodable::generateEncodable(ProtocolParser* parse, const std::string& parent, ProtocolSupport supported, const XMLElement* field)
 {
     Encodable* enc = NULL;
 
-    if(field.tagName().contains("Structure", Qt::CaseInsensitive))
-        enc = new ProtocolStructure(parse, Parent, supported);
-    else if(field.tagName().contains("Data", Qt::CaseInsensitive))
-        enc = new ProtocolField(parse, Parent, supported);
-    else if(field.tagName().contains("Code", Qt::CaseInsensitive))
-        enc = new ProtocolCode(parse, Parent, supported);
+    if(field == nullptr)
+        return enc;
+
+    std::string tagname(field->Name());
+
+    if(contains(tagname, "structure"))
+        enc = new ProtocolStructure(parse, parent, supported);
+    else if(contains(tagname, "data"))
+        enc = new ProtocolField(parse, parent, supported);
+    else if(contains(tagname, "code"))
+        enc = new ProtocolCode(parse, parent, supported);
 
     if(enc != NULL)
     {

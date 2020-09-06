@@ -17,7 +17,7 @@
     <Documentation comment="------------"/>
     <Documentation name="Packets" paragraph="1"/>
 
-    <Structure name="testPacket" encode="false" decode="false" file="DemolinkProtocol.h" comment="A simple packet structure demonstrating that you can output basic structures without encodings">
+    <Structure name="testPacket" encode="false" decode="false" map="false" print="false" compare="false" file="DemolinkProtocol" comment="A simple packet structure demonstrating that you can output basic structures without encodings">
         <Enum name="testPktIds" comment="Values used in the definition of the generic packet">
             <Value name="TEST_PKT_SYNC_BYTE0" value="0x55" comment="First synchronization byte"/>
             <Value name="TEST_PKT_SYNC_BYTE1" value="0xAA" comment="Second synchronization byte"/>
@@ -40,7 +40,7 @@
         <Data name="Value" inMemoryType="string" array="128" default="null" comment="Variable-length value string"/>
         </Packet>
 
-        <Structure name="PositionLLA" file="base_types" comparefile="compare/base_compare" printfile="compare/base_print" mapfile="map/base_map" comment="Position in latitude, longitude, and altitude with respect to the WGS-84 ellipsoid">
+        <Structure name="PositionLLA" file="base_types" comment="Position in latitude, longitude, and altitude with respect to the WGS-84 ellipsoid">
         <Data name="latitude" inMemoryType="float64" encodedType="signed32" max="pi/2" comment="The latitude of the position in radians, positive North"/>
         <Data name="longitude" inMemoryType="float64" encodedType="signed32" max="pi" comment="The longitude of the position in radians, positive East"/>
         <Data name="altitude" inMemoryType="float64" encodedType="unsigned24" min="-1000" scaler="1000" comment="The altitude above the WGS-84 ellipsoid of the position in meters"/>

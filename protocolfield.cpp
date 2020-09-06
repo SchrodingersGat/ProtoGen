@@ -4,9 +4,12 @@
 #include "enumcreator.h"
 #include "protocolstructuremodule.h"
 #include "protocolbitfield.h"
-#include <QString>
-#include <QDomElement>
-#include <math.h>
+#include "prebuiltSources/floatspecial.h"
+#include <cmath>
+#include <iomanip>
+#include <sstream>
+#include <regex>
+#include <limits>
 
 TypeData::TypeData(ProtocolSupport sup) :
     isBool(false),
@@ -20,6 +23,7 @@ TypeData::TypeData(ProtocolSupport sup) :
     isNull(false),
     bits(8),
     sigbits(0),
+    enummax(0),
     support(sup)
 {
 }
@@ -37,6 +41,8 @@ TypeData::TypeData(const TypeData& that) :
     isNull(that.isNull),
     bits(that.bits),
     sigbits(that.sigbits),
+    enummax(that.enummax),
+    enumName(that.enumName),
     support(that.support)
 {
 }
@@ -58,63 +64,19 @@ void TypeData::clear(void)
     isNull = false;
     bits = 8;
     sigbits = 0;
+    enummax = 0;
+    enumName.clear();
 }
 
 
 /*!
- * Pull a positive integer value from a string
- * \param string is the source string, which can contain a decimal or hexadecimal (0x) value
- * \param ok receives false if there was a problem with the decode
- * \return the positive integer value or 0 if there was a problem
+ * Determine the typename of this field (for example uint8_t).
+ * \param structName is the structure name, if this is a structure.
+ * \return the type name that should appear in code.
  */
-int TypeData::extractPositiveInt(const QString& string, bool* ok)
+std::string TypeData::toTypeString(const std::string& structName) const
 {
-    QString number = string;
-
-    if(number.contains("0x", Qt::CaseInsensitive))
-    {
-        QRegExp rx("[^0123456789AaBbCcDdEeFf]");
-        number.replace(rx, "");
-        return number.toInt(ok, 16);
-    }
-    else
-    {
-        QRegExp rx("[^0123456789]");
-        number.replace(rx, "");
-        return number.toInt(ok, 10);
-    }
-
-}
-
-
-/*!
- * Pull a double precision value from a string
- * \param string is the source string
- * \param ok receives false if there was a problem with the decode
- * \return the double precision value or 0 if there was a problem
- */
-double TypeData::extractDouble(const QString& string, bool* ok)
-{
-    QString number = string;
-
-    if(number.contains("0x", Qt::CaseInsensitive) && !number.contains("."))
-    {
-        QRegExp rx("[^0123456789AaBbCcDdEeFf]");
-        number.replace(rx, "");
-        return (double)number.toInt(ok, 16);
-    }
-    else
-    {
-        QRegExp rx("[^0123456789-\\.]");
-        number.replace(rx, "");
-        return number.toDouble(ok);
-    }
-}
-
-
-QString TypeData::toTypeString(QString enumName, QString structName) const
-{
-    QString typeName;
+    std::string typeName;
 
     if(isString)
         typeName = "char";
@@ -131,12 +93,12 @@ QString TypeData::toTypeString(QString enumName, QString structName) const
     }
     else if(isStruct)
     {
-        typeName = structName;
+        typeName = trimm(structName);
 
-        // Make sure it ends with "_t";
-        if(!typeName.endsWith("_t"))
+        // Make sure it ends with the suffix;
+        if(!endsWith(typeName, support.typeSuffix))
         {
-            typeName += "_t";
+            typeName += support.typeSuffix;
         }
     }
     else
@@ -178,16 +140,365 @@ QString TypeData::toTypeString(QString enumName, QString structName) const
 
 
 /*!
+ * Determine the signature of this field (for example uint8).
+ * \return the signature name of this field.
+ */
+std::string TypeData::toSigString(void) const
+{
+    if(isString || isBitfield || isStruct || isBool)
+        return "unknown";
+    else if(isFloat)
+    {
+        return "float" + std::to_string(bits);
+
+    }// if floating point type
+    else
+    {
+        if(isSigned)
+            return "int" + std::to_string(bits);
+        else
+            return "uint" + std::to_string(bits);
+
+    }// else if integer type
+
+}// toSigString
+
+
+/*!
+ * Determine the maximum floating point value this TypeData can hold
+ * \return the maximum floating point value of this TypeData
+ */
+double TypeData::getMaximumFloatValue(void) const
+{
+    if(isString || isStruct)
+        return 0;
+    else if(isEnum)
+    {
+        return enummax;
+    }
+    else if(isFloat)
+    {
+        // Float encodings use float rules
+        if(bits <= 16)
+        {
+            return float16ToFloat32(float32ToFloat16( std::numeric_limits<float>::max(), sigbits), sigbits);
+        }
+        else if(bits <= 24)
+        {
+            return float24ToFloat32(float32ToFloat24( std::numeric_limits<float>::max(), sigbits), sigbits);
+        }
+        else if(bits <= 32)
+        {
+            return std::numeric_limits<float>::max();
+        }
+        else
+            return std::numeric_limits<double>::max();
+    }
+    else
+    {
+        return (double)getMaximumIntegerValue();
+    }
+
+}// TypeData::getMaximumFloatValue
+
+
+/*!
+ * Determine the minimum floating point value this TypeData can hold
+ * \return the minimum floating point value of this TypeData
+ */
+double TypeData::getMinimumFloatValue(void) const
+{
+    if(isString || isStruct)
+        return 0;
+    else if(isFloat)
+    {
+        // Float encodings use float rules
+        if(bits <= 16)
+        {
+            // Note that min() is the smallest positive number
+            return float16ToFloat32(float32ToFloat16(-1*std::numeric_limits<float>::max(), sigbits), sigbits);
+        }
+        else if(bits <= 24)
+        {
+            return float24ToFloat32(float32ToFloat24(-1*std::numeric_limits<float>::max(), sigbits), sigbits);
+        }
+        else if(bits <= 32)
+        {
+            return -1*std::numeric_limits<float>::max();
+        }
+        else
+            return -1*std::numeric_limits<double>::max();
+    }
+    else
+    {
+        return (double)getMinimumIntegerValue();
+    }
+
+}// TypeData::getMinimumFloatValue
+
+
+/*!
+ * Determine the maximum integer value this TypeData can hold
+ * \return the maximum integer value of this TypeData
+ */
+uint64_t TypeData::getMaximumIntegerValue(void) const
+{
+    if(isString || isStruct)
+        return 0;
+    else if(isEnum)
+    {
+        return enummax;
+    }
+    else if(isFloat)
+    {
+        return (uint64_t)getMaximumFloatValue();
+    }
+    else if(isSigned)
+    {
+        uint64_t max = (0x1ull << (bits-1)) - 1;
+        return max;
+    }
+    else
+    {
+        uint64_t max = (0x1ull << bits) - 1;
+        return max;
+    }
+
+}// TypeData::getMaximumIntegerValue
+
+
+/*!
+ * Determine the minimum integer value this TypeData can hold
+ * \return the minimum integer value of this TypeData
+ */
+int64_t TypeData::getMinimumIntegerValue(void) const
+{
+    if(isString || isStruct)
+        return 0;
+    else if(isFloat)
+    {
+        return (int64_t)getMinimumFloatValue();
+    }
+    else if(isSigned)
+    {
+        // We have to deal with the sign extension here. For example -128 for an
+        // 8-bit number is 0x80, but -128 for a 16-bit number is 0xFF80. Since we
+        // are returning a 64-bit number it is almost always bigger than the
+        // number of bits and sign extensions must be applied
+        int64_t min = (0xFFFFFFFFFFFFFFFFll << (bits-1));
+        return min;
+    }
+    else
+    {
+        return 0;
+    }
+
+}// TypeData::getMinimumIntegerValue
+
+
+/*!
+ * Given a constant string (like default value) apply the type correct suffix
+ * for the type, or apply a cast if a suffix cannot be used.
+ * \param number is the input number whose type must be set.
+ * \return The correctly typed number, using either a constant suffix or a cast.
+ */
+std::string TypeData::applyTypeToConstant(const std::string& number) const
+{
+    if(isString || isStruct)
+        return number;
+
+    std::string output = trimm(number);
+
+    if(output.empty())
+    {
+        if(isEnum && !enumName.empty())
+            return "(" + enumName + ")0";
+        else
+            return "0";
+    }
+
+    // Remove the existing suffix
+    if(startsWith(number, "0b"))
+    {
+        while(!output.empty() && !ShuntingYard::isNumber(output.back(), false, true))
+            output.erase(output.size() - 1, 1);
+    }
+    else if(startsWith(number, "0x"))
+    {
+        while(!output.empty() && !ShuntingYard::isNumber(output.back(), true, false))
+            output.erase(output.size() - 1, 1);
+    }
+    else
+    {
+        while(!output.empty() && !ShuntingYard::isNumber(output.back(), false, false))
+            output.erase(output.size() - 1, 1);
+    }
+
+
+    // Is the result still a number? It might not be if the input was an
+    // enumeration or defined constant or some such. In that case we just
+    // apply a cast and hope for the best.
+    bool ok;
+    double value = ShuntingYard::toNumber(output, &ok);
+    if(!ok)
+        return "(" + toTypeString() + ")" + number;
+
+    // Add the correct suffix for the numeric type
+    if(isFloat)
+    {
+        // Make sure we have a decimal point. If we already have one, but its
+        // the last character, add the 0. So "10" -> "10.0", or "10." -> "10.0"
+        if(output.find('.') == std::string::npos)
+            output += ".0";
+        else if(output.back() == '.')
+            output += "0";
+
+        // Finally put the 'f' at the end if this is a float
+        if(bits <= 32)
+            output += "f";
+    }
+    else
+    {
+        std::string suffix;
+
+        // In this case we only need the suffix if the integer constant is large enough
+        value = fabs(value);
+
+        if(value >= 4294967295.0)
+            suffix = "ll";
+        else if((value >= 2147483647.0) && isSigned)
+            suffix = "ll";
+        else if(value >= 65535.0)
+            suffix = "l";
+        else if((value >= 32767.0) && isSigned)
+            suffix = "l";
+
+        if(!suffix.empty())
+        {
+            if(!isSigned)
+                output += "u";
+
+            output += suffix;
+        }
+    }
+
+    return output;
+
+}// TypeData::applyTypeToConstant
+
+
+/*!
+ * Pull a positive integer value from a string
+ * \param string is the source string, which can contain a decimal or hexadecimal (0x) value
+ * \param ok receives false if there was a problem with the decode
+ * \return the positive integer value or 0 if there was a problem
+ */
+int TypeData::extractPositiveInt(const std::string& string, bool* ok)
+{
+    int base = 10;
+    std::regex regex;
+    int value = 0;
+
+    if(contains(string, "0b"))
+    {
+        base = 2;
+        regex = std::regex(R"([^01])");
+    }
+    else if(contains(string, "0x"))
+    {
+        base = 16;
+        regex = std::regex(R"([^0123456789AaBbCcDdEeFf])");
+    }
+    else
+    {
+        base = 10;
+        regex = std::regex(R"([^0123456789])");
+    }
+
+    if(ok != nullptr)
+        (*ok) = true;
+
+    try
+    {
+        value = std::stoi(std::regex_replace(string, regex, ""), nullptr, base);
+    }
+    catch (...)
+    {
+        value = 0;
+        if(ok != nullptr)
+            (*ok) = false;
+    }
+
+    return value;
+}
+
+
+/*!
+ * Pull a double precision value from a string
+ * \param string is the source string
+ * \param ok receives false if there was a problem with the decode
+ * \return the double precision value or 0 if there was a problem
+ */
+double TypeData::extractDouble(const std::string& string, bool* ok)
+{
+    int base = 10;
+    std::regex regex;
+    double value = 0;
+
+    if(contains(string, "0b") && !contains(string, "."))
+    {
+        base = 2;
+        regex = std::regex(R"([^01])");
+    }
+    else if(contains(string, "0x") && !contains(string, "."))
+    {
+        base = 16;
+        regex = std::regex(R"([^0123456789AaBbCcDdEeFf])");
+    }
+    else
+    {
+        base = 10;
+        regex = std::regex(R"([^0123456789\-\.])");
+    }
+
+    if(ok != nullptr)
+        (*ok) = true;
+
+    try
+    {
+        if(base == 10)
+            value = std::stod(std::regex_replace(string, regex, ""), nullptr);
+        else
+            value = std::stol(std::regex_replace(string, regex, ""), nullptr, base);
+    }
+    catch (...)
+    {
+        value = 0;
+        if(ok != nullptr)
+            (*ok) = false;
+    }
+
+    return value;
+}
+
+
+/*!
  * Construct a blank protocol field
  * \param parse points to the global protocol parser that owns everything
  * \param parent is the hierarchical name of the parent object
  * \param supported indicates what the protocol can support
  */
-ProtocolField::ProtocolField(ProtocolParser* parse, QString parent, ProtocolSupport supported):
+ProtocolField::ProtocolField(ProtocolParser* parse, std::string parent, ProtocolSupport supported):
     Encodable(parse, parent, supported),
     encodedMin(0),
     encodedMax(0),
     scaler(1),
+    hasVerifyMinValue(false),
+    verifyMinValue(0),
+    limitMinValue(0),
+    hasVerifyMaxValue(false),
+    verifyMaxValue(0),
+    limitMaxValue(0),
     checkConstant(false),
     overridesPrevious(false),
     isOverriden(false),
@@ -197,6 +508,37 @@ ProtocolField::ProtocolField(ProtocolParser* parse, QString parent, ProtocolSupp
     hidden(false),
     mapOptions(MAP_BOTH)
 {
+    attriblist = {"name",
+                  "title",
+                  "inMemoryType",
+                  "encodedType",
+                  "struct",
+                  "max",
+                  "min",
+                  "scaler",
+                  "printscaler",
+                  "array",
+                  "variableArray",
+                  "array2d",
+                  "variable2dArray",
+                  "dependsOn",
+                  "dependsOnValue",
+                  "dependsOnCompare",
+                  "enum",
+                  "default",
+                  "constant",
+                  "checkConstant",
+                  "comment",
+                  "Units",
+                  "Range",
+                  "Notes",
+                  "bitfieldGroup",
+                  "hidden",
+                  "initialValue",
+                  "verifyMinValue",
+                  "verifyMaxValue",
+                  "map",
+                  "limitOnEncode"};
 }
 
 
@@ -207,7 +549,6 @@ void ProtocolField::clear(void)
 {
     Encodable::clear();
 
-    enumName.clear();
     encodedMin = encodedMax = 0;
     scaler = 1;
     defaultString.clear();
@@ -234,6 +575,16 @@ void ProtocolField::clear(void)
     initialValueStringForDisplay.clear();
     verifyMinStringForDisplay.clear();
     verifyMaxStringForDisplay.clear();
+    limitMinString.clear();
+    limitMinStringForComment.clear();
+    limitMinValue = 0;
+    hasVerifyMinValue = false;
+    verifyMinValue = 0;
+    limitMaxString.clear();
+    limitMaxStringForComment.clear();
+    limitMaxValue = 0;
+    hasVerifyMaxValue = false;
+    verifyMaxValue = 0;
 
 }// ProtocolField::clear
 
@@ -273,7 +624,7 @@ void ProtocolField::setPreviousEncodable(Encodable* prev)
             setStartingBitCount(prevField->getEndingBitCount());
 
             // Now that we know our starting bitcount we can apply the bitfield defaults warning
-            if(!defaultString.isEmpty() && (defaultString != "0") && (bitfieldData.startingBitCount != 0) && !bitfieldCrossesByteBoundary())
+            if(!defaultString.empty() && (defaultString != "0") && (bitfieldData.startingBitCount != 0) && !bitfieldCrossesByteBoundary())
             {
                 // The key concept is this: bitfields can have defaults, but if
                 // the bitfield does not start a new byte it is possible (not
@@ -328,29 +679,30 @@ bool ProtocolField::getOverriddenTypeData(ProtocolField* prev)
     // If we get here, then this is our baby. Update the data being overriden.
     inMemoryType = prev->inMemoryType;
 
-    if(!enumName.isEmpty())
+    if(!inMemoryType.enumName.empty())
         emitWarning("Enumeration name ignored for overridden field");
-    enumName = prev->enumName;
 
-    if(!array.isEmpty())
+    inMemoryType.enumName = prev->inMemoryType.enumName;
+
+    if(!array.empty())
         emitWarning("Array information ignored for overridden field");
     array = prev->array;
 
-    if(!array2d.isEmpty())
+    if(!array2d.empty())
         emitWarning("2D Array information ignored for overridden field");
     array2d = prev->array2d;
 
     // This information can be modified, but is typically taken from the original.
-    if(variableArray.isEmpty())
+    if(variableArray.empty())
         variableArray = prev->variableArray;
 
-    if(variable2dArray.isEmpty())
+    if(variable2dArray.empty())
         variable2dArray = prev->variable2dArray;
 
-    if(dependsOn.isEmpty())
+    if(dependsOn.empty())
         dependsOn = prev->dependsOn;
 
-    if(comment.isEmpty())
+    if(comment.empty())
         comment = prev->comment;
 
     // Recompute the length now that the array data are up to date
@@ -379,48 +731,46 @@ void ProtocolField::getBitfieldGroupNumBytes(int* num) const
  * Extract the type information from the type string, for in memory types
  * \param data holds the extracted type
  * \param type is the type string
- * \param name is the name of this field, used for warnings
  * \param inMemory is true if this is an in-memory type string, else encoded
+ * \param _enumName is the name of the enumeration, if this is an enumerated type.
  */
-void ProtocolField::extractType(TypeData& data, const QString& typeString, const QString& name, bool inMemory)
+void ProtocolField::extractType(TypeData& data, const std::string& typeString, bool inMemory, const std::string& _enumName)
 {
-    Q_UNUSED(name);
-
-    QString type(typeString);
+    std::string type(typeString);
 
     data.clear();
 
-    if(type.startsWith("n", Qt::CaseInsensitive))
+    if(startsWith(type, "n"))
         data.isNull = true;
-    else if(type.startsWith("over", Qt::CaseInsensitive) && inMemory)
+    else if(startsWith(type, "over") && inMemory)
     {
         overridesPrevious = true;
 
         // This is just a place holder, it will get overriden later
         data.bits = 32;
     }
-    else if(type.startsWith("stru", Qt::CaseInsensitive))
+    else if(startsWith(type, "stru"))
     {
         if(inMemory)
             data.isStruct = true;
         else
             return;
     }
-    else if(type.startsWith("string", Qt::CaseInsensitive))
+    else if(startsWith(type, "string"))
     {
         data.isString = true;
         data.isFixedString = false;
 
         data.bits = 8;
     }
-    else if(type.startsWith("fixedstring", Qt::CaseInsensitive))
+    else if(startsWith(type, "fixedstring"))
     {
         data.isString = true;
         data.isFixedString = true;
 
         data.bits = 8;
     }
-    else if(type.startsWith("bo", Qt::CaseInsensitive))
+    else if(startsWith(type, "bo"))
     {
         // default to unsigned 8
         data.bits = 8;
@@ -438,7 +788,7 @@ void ProtocolField::extractType(TypeData& data, const QString& typeString, const
             data.isBool = true;
         }
     }
-    else if(type.startsWith("bi", Qt::CaseInsensitive))
+    else if(startsWith(type, "bi"))
     {
         // Get the number of bits, between 1 and 32 inclusive
         data.bits = data.extractPositiveInt(type);
@@ -474,12 +824,13 @@ void ProtocolField::extractType(TypeData& data, const QString& typeString, const
             }
         }
     }
-    else if(type.startsWith("e", Qt::CaseInsensitive))
+    else if(startsWith(type, "e"))
     {
         // enumeration types are only for in-memory, never encoded
         if(inMemory)
         {
             data.isEnum = true;
+            data.enumName = _enumName;
         }
         else
         {
@@ -490,9 +841,10 @@ void ProtocolField::extractType(TypeData& data, const QString& typeString, const
     }
     else
     {
+        // Get the number of bits, between 1 and 32 inclusive
         data.bits = data.extractPositiveInt(type);
 
-        if(type.startsWith("u", Qt::CaseInsensitive))
+        if(startsWith(type, "u"))
         {
             data.isSigned = false;
         }
@@ -500,14 +852,14 @@ void ProtocolField::extractType(TypeData& data, const QString& typeString, const
         {
             data.isSigned = true;
 
-            if(type.startsWith("f", Qt::CaseInsensitive))
+            if(startsWith(type, "f"))
             {
                 // we want to handle the cas where the user types "float16:10" to specify the number of significands
-                if(type.contains(":"))
+                if(type.find(':') != std::string::npos)
                 {
-                    QStringList list = type.split(":", QString::SkipEmptyParts);
+                    std::vector<std::string> list = split(type, ":");
 
-                    if(list.count() >= 2)
+                    if(list.size() >= 2)
                     {
                         data.bits = data.extractPositiveInt(list.at(0));
                         data.sigbits = data.extractPositiveInt(list.at(1));
@@ -521,7 +873,7 @@ void ProtocolField::extractType(TypeData& data, const QString& typeString, const
                 if(data.bits == 0)
                     data.bits = 32;
             }
-            else if(type.startsWith("d", Qt::CaseInsensitive))
+            else if(startsWith(type, "d"))
             {
                 data.isFloat = true;
 
@@ -529,7 +881,7 @@ void ProtocolField::extractType(TypeData& data, const QString& typeString, const
                 if(data.bits == 0)
                     data.bits = 64;
             }
-            else if(!type.startsWith("s", Qt::CaseInsensitive) && !type.startsWith("i", Qt::CaseInsensitive))
+            else if(!startsWith(type, "s") && !startsWith(type, "i"))
             {
                 emitWarning("in memory type name not understood, signed integer assumed");
             }
@@ -679,155 +1031,105 @@ void ProtocolField::extractType(TypeData& data, const QString& typeString, const
  */
 void ProtocolField::parse(void)
 {
-    QString memoryTypeString;
-    QString encodedTypeString;
-    QString structName;
+    std::string memoryTypeString;
+    std::string encodedTypeString;
+    std::string structName;
+    std::string enumName;
 
     clear();
 
-    QDomNamedNodeMap map = e.attributes();
+    if(e == nullptr)
+        return;
+
+    const XMLAttribute* map = e->FirstAttribute();
 
     // We use name as part of our debug outputs, so its good to have it first.
     name = ProtocolParser::getAttribute("name", map);
 
     // Tell the user of attribute problems
-    testAndWarnAttributes(map, QStringList() << "name"
-                                             << "title"
-                                             << "inMemoryType"
-                                             << "encodedType"
-                                             << "struct"
-                                             << "max"
-                                             << "min"
-                                             << "scaler"
-                                             << "printscaler"
-                                             << "array"
-                                             << "variableArray"
-                                             << "array2d"
-                                             << "variable2dArray"
-                                             << "dependsOn"
-                                             << "dependsOnValue"
-                                             << "dependsOnCompare"
-                                             << "enum"
-                                             << "default"
-                                             << "constant"
-                                             << "checkConstant"
-                                             << "comment"
-                                             << "Units"
-                                             << "Range"
-                                             << "Notes"
-                                             << "bitfieldGroup"
-                                             << "hidden"
-                                             << "initialValue"
-                                             << "verifyMinValue"
-                                             << "verifyMaxValue"
-                                             << "map");
+    testAndWarnAttributes(map);
 
-    for(int i = 0; i < map.count(); i++)
+    // This will propagate to any of the children we create
+    if(ProtocolParser::isFieldSet("limitOnEncode", map))
+        support.limitonencode = true;
+    else if(ProtocolParser::isFieldClear("limitOnEncode", map))
+        support.limitonencode = false;
+
+    title = ProtocolParser::getAttribute("title", map);
+    memoryTypeString = ProtocolParser::getAttribute("inMemoryType", map);
+    encodedTypeString = ProtocolParser::getAttribute("encodedType", map);
+    structName = ProtocolParser::getAttribute("struct", map);
+    maxString = ProtocolParser::getAttribute("max", map);
+    minString = ProtocolParser::getAttribute("min", map);
+    scalerString = ProtocolParser::getAttribute("scaler", map);
+    printScalerString = ProtocolParser::getAttribute("printscaler", map);
+    array = ProtocolParser::getAttribute("array", map);
+    variableArray = ProtocolParser::getAttribute("variableArray", map);
+    array2d = ProtocolParser::getAttribute("array2d", map);
+    variable2dArray = ProtocolParser::getAttribute("variable2dArray", map);
+    dependsOn = ProtocolParser::getAttribute("dependsOn", map);
+    dependsOnValue = ProtocolParser::getAttribute("dependsOnValue", map);
+    dependsOnCompare = ProtocolParser::getAttribute("dependsOnCompare", map);
+    enumName = ProtocolParser::getAttribute("enum", map);
+    defaultString = ProtocolParser::getAttribute("default", map);
+    constantString = ProtocolParser::getAttribute("constant", map);
+    comment = ProtocolParser::getAttribute("comment", map);
+    bitfieldData.groupMember = bitfieldData.groupStart = ProtocolParser::isFieldSet("bitfieldGroup", map);
+    initialValueString = ProtocolParser::getAttribute("initialValue", map);
+    verifyMinString = ProtocolParser::getAttribute("verifyMinValue", map);
+    verifyMaxString = ProtocolParser::getAttribute("verifyMaxValue", map);
+    hidden = ProtocolParser::isFieldSet("hidden", map);
+    checkConstant = ProtocolParser::isFieldSet("checkConstant", map);
+
+    extraInfoValues.push_back(ProtocolParser::getAttribute("Units", map));
+    if(extraInfoValues.back().empty())
+        extraInfoValues.pop_back();
+    else
+        extraInfoNames.push_back("Units");
+
+    extraInfoValues.push_back(ProtocolParser::getAttribute("Range", map));
+    if(extraInfoValues.back().empty())
+        extraInfoValues.pop_back();
+    else
+        extraInfoNames.push_back("Range");
+
+    extraInfoValues.push_back(ProtocolParser::getAttribute("Notes", map));
+    if(extraInfoValues.back().empty())
+        extraInfoValues.pop_back();
+    else
+        extraInfoNames.push_back("Notes");
+
+    std::string temp = ProtocolParser::getAttribute("map", map);
+    if(!temp.empty())
     {
-        QDomAttr attr = map.item(i).toAttr();
-        if(attr.isNull())
-            continue;
+        if(contains(temp, "encode"))
+            mapOptions = MAP_ENCODE;
+        else if(contains(temp, "decode"))
+            mapOptions = MAP_DECODE;
+        else if(ProtocolParser::isFieldSet(temp))
+            mapOptions = MAP_BOTH;
+        else if(ProtocolParser::isFieldClear(temp))
+            mapOptions = MAP_NONE;
+        else
+            emitWarning("Value for 'map' field is incorrect: '" + temp + "'");
 
-        QString attrname = attr.name();
-
-        if(attrname.compare("title", Qt::CaseInsensitive) == 0)
-            title = attr.value().trimmed();
-        if(attrname.compare("inMemoryType", Qt::CaseInsensitive) == 0)
-            memoryTypeString = attr.value().trimmed();
-        else if(attrname.compare("encodedType", Qt::CaseInsensitive) == 0)
-            encodedTypeString = attr.value().trimmed();
-        else if(attrname.compare("struct", Qt::CaseInsensitive) == 0)
-            structName = attr.value().trimmed();
-        else if(attrname.compare("max", Qt::CaseInsensitive) == 0)
-            maxString = attr.value().trimmed();
-        else if(attrname.compare("min", Qt::CaseInsensitive) == 0)
-            minString = attr.value().trimmed();
-        else if(attrname.compare("scaler", Qt::CaseInsensitive) == 0)
-            scalerString = attr.value().trimmed();
-        else if(attrname.compare("printscaler", Qt::CaseInsensitive) == 0)
-            printScalerString = attr.value().trimmed();
-        else if(attrname.compare("array", Qt::CaseInsensitive) == 0)
-            array = attr.value().trimmed();
-        else if(attrname.compare("variableArray", Qt::CaseInsensitive) == 0)
-            variableArray = attr.value().trimmed();
-        else if(attrname.compare("array2d", Qt::CaseInsensitive) == 0)
-            array2d = attr.value().trimmed();
-        else if(attrname.compare("variable2dArray", Qt::CaseInsensitive) == 0)
-            variable2dArray = attr.value().trimmed();
-        else if(attrname.compare("dependsOn", Qt::CaseInsensitive) == 0)
-            dependsOn = attr.value().trimmed();
-        else if(attrname.compare("dependsOnValue", Qt::CaseInsensitive) == 0)
-            dependsOnValue = attr.value().trimmed();
-        else if(attrname.compare("dependsOnCompare", Qt::CaseInsensitive) == 0)
-            dependsOnCompare = attr.value().trimmed();
-        else if(attrname.compare("enum", Qt::CaseInsensitive) == 0)
-            enumName = attr.value().trimmed();
-        else if(attrname.compare("default", Qt::CaseInsensitive) == 0)
-            defaultString = attr.value().trimmed();
-        else if(attrname.compare("constant", Qt::CaseInsensitive) == 0)
-            constantString = attr.value().trimmed();
-        else if(attrname.compare("checkConstant", Qt::CaseInsensitive) == 0)
-            checkConstant = ProtocolParser::isFieldSet(attr.value().trimmed());
-        else if(attrname.compare("comment", Qt::CaseInsensitive) == 0)
-            comment = ProtocolParser::reflowComment(attr.value().trimmed());
-        else if(attrname.compare("Units", Qt::CaseInsensitive) == 0)
-        {
-            extraInfoNames.append("Units");
-            extraInfoValues.append(attr.value());
-        }
-        else if(attrname.compare("Range", Qt::CaseInsensitive) == 0)
-        {
-            extraInfoNames.append("Range");
-            extraInfoValues.append(attr.value());
-        }
-        else if(attrname.compare("Notes", Qt::CaseInsensitive) == 0)
-        {
-            extraInfoNames.append("Notes");
-            extraInfoValues.append(attr.value());
-        }
-        else if(attrname.compare("bitfieldGroup", Qt::CaseInsensitive) == 0)
-            bitfieldData.groupMember = bitfieldData.groupStart = ProtocolParser::isFieldSet(attr.value().trimmed());
-        else if(attrname.compare("hidden", Qt::CaseInsensitive) == 0)
-            hidden = ProtocolParser::isFieldSet(attr.value().trimmed());
-        else if(attrname.compare("initialValue", Qt::CaseInsensitive) == 0)
-            initialValueString = attr.value().trimmed();
-        else if(attrname.compare("verifyMinValue", Qt::CaseInsensitive) == 0)
-            verifyMinString = attr.value().trimmed();
-        else if(attrname.compare("verifyMaxValue", Qt::CaseInsensitive) == 0)
-            verifyMaxString = attr.value().trimmed();
-        else if(attrname.compare("map", Qt::CaseInsensitive) == 0)
-        {
-            QString v = attr.value().trimmed().toLower();
-
-            if(v.compare("encode") == 0)
-                mapOptions = MAP_ENCODE;
-            else if(v.compare("decode") == 0)
-                mapOptions = MAP_DECODE;
-            else if(ProtocolParser::isFieldSet(v))
-                mapOptions = MAP_BOTH;
-            else if (ProtocolParser::isFieldClear(v))
-                mapOptions = MAP_NONE;
-            else
-                emitWarning("Value for 'map' field is incorrect: '" + v + "'");
-        }
-
-    }// for all attributes
-
-    if(name.isEmpty() && (memoryTypeString != "null"))
-    {
-        emitWarning("Data tag without a name: " + e.text());
     }
 
-    if(title.isEmpty())
+    if(name.empty() && (memoryTypeString != "null"))
+    {
+        emitWarning("Data tag without a name");
+    }
+
+    if(title.empty())
         title = name;
 
     // maybe its an enum or a external struct?
-    if(memoryTypeString.isEmpty())
+    if(memoryTypeString.empty())
     {
         // Maybe its an enum?
-        if(!e.attribute("enum").isEmpty())
+        if(e->Attribute("enum"))
             memoryTypeString = "enum";
-        else if(!e.attribute("struct").isEmpty())
+        else if(e->Attribute("struct"))
             memoryTypeString = "struct";
         else
         {
@@ -837,10 +1139,10 @@ void ProtocolField::parse(void)
     }
 
     // Extract the in memory type
-    extractType(inMemoryType, memoryTypeString, name, true);
+    extractType(inMemoryType, memoryTypeString, true, enumName);
 
     // The encoded type string, this can be empty which implies encoded is same as memory
-    if(encodedTypeString.isEmpty())
+    if(encodedTypeString.empty())
     {
         if(overridesPrevious)
             emitWarning("encodedType cannot be empty if inMemoryType is override");
@@ -853,7 +1155,7 @@ void ProtocolField::parse(void)
     }
     else
     {
-        extractType(encodedType, encodedTypeString, name, false);
+        extractType(encodedType, encodedTypeString, false);
 
         // This is just a warning pacifier, we won't learn until later what the
         // in memory type is
@@ -887,7 +1189,7 @@ void ProtocolField::parse(void)
 
     if(inMemoryType.isEnum)
     {
-        if(enumName.isEmpty())
+        if(inMemoryType.enumName.empty())
         {
             emitWarning("enumeration name is missing, type changed to unsigned");
             inMemoryType.isEnum = encodedType.isEnum = false;
@@ -895,13 +1197,17 @@ void ProtocolField::parse(void)
         else
         {
             int minbits = 8;
+            inMemoryType.enummax = 255;
 
             // Figure out the minimum number of bits for the enumeration
-            const EnumCreator* creator = parser->lookUpEnumeration(enumName);
-            if(creator != 0)
+            const EnumCreator* creator = parser->lookUpEnumeration(inMemoryType.enumName);
+            if(creator != nullptr)
+            {
                 minbits = creator->getMinBitWidth();
+                inMemoryType.enummax = creator->getMaximumValue();
+            }
 
-            if(encodedTypeString.isEmpty())
+            if(encodedTypeString.empty())
             {
                 // Make it a multiple of 8 bits. The only way to have something
                 // different is to encode as a bitfield, which means the
@@ -917,7 +1223,7 @@ void ProtocolField::parse(void)
                 // make sure the encoded length data is large enough
                 if(encodedType.bits < minbits)
                 {
-                    emitWarning("enumeration needs at least " + QString::number(minbits) + " bits. Encoded bit length changed.");
+                    emitWarning("enumeration needs at least " + std::to_string(minbits) + " bits. Encoded bit length changed.");
                     if(!encodedType.isBitfield)
                     {
                         // Make it a multiple of 8 bits
@@ -937,13 +1243,13 @@ void ProtocolField::parse(void)
 
     if(inMemoryType.isStruct)
     {
-        if(structName.isEmpty())
+        if(structName.empty())
         {
             emitWarning("struct name is missing, struct name \"unknown\" used, probable compile failure");
             structName = "unknown";
         }
 
-        if(!constantString.isEmpty() || checkConstant)
+        if(!constantString.empty() || checkConstant)
         {
             constantString.clear();
             checkConstant = false;
@@ -962,7 +1268,7 @@ void ProtocolField::parse(void)
     {
         if(!encodedType.isNull)
         {
-            if(!encodedTypeString.isEmpty() && !encodedType.isBitfield)
+            if(!encodedTypeString.empty() && !encodedType.isBitfield)
                 emitWarning("encoded type ignored because in memory type is bitfield");
 
             // make the encoded type follow the in memory type for bit fields
@@ -979,7 +1285,7 @@ void ProtocolField::parse(void)
         // Do we start a bitfield group?
         if(bitfieldData.groupMember)
         {
-            if(!defaultString.isEmpty())
+            if(!defaultString.empty())
             {
                 emitWarning("bitfield groups cannot have default values");
                 defaultString.clear();
@@ -987,13 +1293,13 @@ void ProtocolField::parse(void)
 
         }
 
-        if(!dependsOn.isEmpty())
+        if(!dependsOn.empty())
         {
             emitWarning("bitfields cannot use dependsOn");
             dependsOn.clear();
         }
 
-        if(!array.isEmpty())
+        if(!array.empty())
         {
             emitWarning("bitfields encodings cannot use arrays");
             array.clear();
@@ -1034,40 +1340,40 @@ void ProtocolField::parse(void)
         inMemoryType.bits = encodedType.bits = 8;
     }
 
-    if(array.isEmpty() && !variableArray.isEmpty())
+    if(array.empty() && !variableArray.empty())
     {
         emitWarning("Must specify array length to specify variable array length");
         variableArray.clear();
     }
 
-    if(array.isEmpty() && !array2d.isEmpty())
+    if(array.empty() && !array2d.empty())
     {
         emitWarning("Must specify array length to specify second dimension array length");
         array2d.clear();
     }
 
-    if(array2d.isEmpty() && !variable2dArray.isEmpty())
+    if(array2d.empty() && !variable2dArray.empty())
     {
         emitWarning("Must specify array 2d length to specify variable 2d array length");
         variable2dArray.clear();
     }
 
-    if(!scalerString.isEmpty() && !maxString.isEmpty())
+    if(!scalerString.empty() && !maxString.empty())
     {
         emitWarning("scaler ignored because max is provided");
         scalerString.clear();
     }
 
     // handle the scaler used for printing and comparing
-    if(!printScalerString.isEmpty())
+    if(!printScalerString.empty())
     {
         bool ok;
         double printScaler = ShuntingYard::computeInfix(printScalerString, &ok);
 
         if(ok)
         {
-            printScalerString = "*" + QString::number(printScaler, 'g', 16);
-            readScalerString = "/" + QString::number(printScaler, 'g', 16);
+            printScalerString = "*" + getNumberString(printScaler);
+            readScalerString = "/" + getNumberString(printScaler);
         }
         else
         {
@@ -1089,7 +1395,7 @@ void ProtocolField::parse(void)
         }
     }
 
-    if(!maxString.isEmpty() || !minString.isEmpty() || !scalerString.isEmpty())
+    if(!maxString.empty() || !minString.empty() || !scalerString.empty())
     {
         if(inMemoryType.isStruct || inMemoryType.isString || encodedType.isNull || inMemoryType.isBool)
         {
@@ -1098,10 +1404,9 @@ void ProtocolField::parse(void)
             minString.clear();
             scalerString.clear();
         }
-
     }
 
-    if(!maxString.isEmpty() || !minString.isEmpty())
+    if(!maxString.empty() || !minString.empty())
     {
         if(encodedType.isFloat)
         {
@@ -1109,10 +1414,18 @@ void ProtocolField::parse(void)
             maxString.clear();
             minString.clear();
         }
-
     }
 
-    if(constantString.isEmpty() && checkConstant)
+    if(!minString.empty())
+    {
+        if(encodedType.isSigned)
+        {
+            emitWarning("min value ignored because encoded type is signed");
+            minString.clear();
+        }
+    }
+
+    if(constantString.empty() && checkConstant)
     {
         emitWarning("\"checkConstant\" cannot be applied unless the field is constant");
         checkConstant = false;
@@ -1121,34 +1434,34 @@ void ProtocolField::parse(void)
     if(inMemoryType.isString)
     {
         // Strings have to be arrays, default to 64 characters
-        if(array.isEmpty())
+        if(array.empty())
         {
             emitWarning("string length not provided, assuming 64");
             array = "64";
         }
 
         // Strings are always variable length, through null termination
-        if(!variableArray.isEmpty())
+        if(!variableArray.empty())
         {
             emitWarning("strings cannot use variableAray attribute, they are always variable length through null termination (unless fixedstring)");
             variableArray.clear();
         }
 
-        if(!array2d.isEmpty())
+        if(!array2d.empty())
         {
             emitWarning("2d arrays not allowed for strings");
             array2d.clear();
             variable2dArray.clear();
         }
 
-        if(!dependsOn.isEmpty())
+        if(!dependsOn.empty())
         {
             emitWarning("strings cannot use dependsOn");
             dependsOn.clear();
         }
 
     }// if string
-    else if(!array.isEmpty())
+    else if(!array.empty())
     {
         if(checkConstant)
         {
@@ -1160,39 +1473,39 @@ void ProtocolField::parse(void)
 
     if(encodedType.isNull)
     {
-        if(!constantString.isEmpty())
+        if(!constantString.empty())
         {
             emitWarning("constant value does not make sense for types that are not encoded (null)");
             constantString.clear();
             checkConstant = false;
         }
 
-        if(!variableArray.isEmpty() || !variable2dArray.isEmpty())
+        if(!variableArray.empty() || !variable2dArray.empty())
         {
             emitWarning("variable length arrays do not make sense for types that are not encoded (null)");
             variableArray.clear();
             variable2dArray.clear();
         }
 
-        if(!dependsOn.isEmpty())
+        if(!dependsOn.empty())
         {
             emitWarning("dependsOn does not make sense for types that are not encoded (null)");
             dependsOn.clear();
         }
     }
 
-    if(!dependsOnValue.isEmpty() && dependsOn.isEmpty())
+    if(!dependsOnValue.empty() && dependsOn.empty())
     {
         emitWarning("dependsOnValue does not make sense unless dependsOn is defined");
         dependsOnValue.clear();
     }
 
-    if(!dependsOnCompare.isEmpty() && dependsOnValue.isEmpty())
+    if(!dependsOnCompare.empty() && dependsOnValue.empty())
     {
         emitWarning("dependsOnCompare does not make sense unless dependsOnValue is defined");
         dependsOnCompare.clear();
     }
-    else if(dependsOnCompare.isEmpty() && !dependsOnValue.isEmpty())
+    else if(dependsOnCompare.empty() && !dependsOnValue.empty())
     {
         // This is not a warning, it is expected
         dependsOnCompare = "==";
@@ -1200,34 +1513,35 @@ void ProtocolField::parse(void)
 
     bool ok;
 
-    if(!minString.isEmpty())
+    // minString specifies the minimum value that can be encoded. It only
+    // applies if the encoded type is not signed, and if the encoded type is
+    // not floating point. It is possible to have a minString without a
+    // scaler or maxString.
+    if(!minString.empty())
     {
-        if(encodedType.isSigned)
+        encodedMin = ShuntingYard::computeInfix(parser->replaceEnumerationNameWithValue(minString), &ok);
+
+        if(!ok)
         {
-            emitWarning("min value ignored because encoded type is signed");
-            minString.clear();
+            emitWarning("min is not a number, 0.0 assumed");
+            encodedMin = 0.0;
+            minString = "0";
         }
         else
         {
-            encodedMin = ShuntingYard::computeInfix(minString, &ok);
-
-            if(!ok)
-            {
-                emitWarning("min is not a number, 0.0 assumed");
-                minString = "0";
-            }
-            else
-            {
-                // Special case handling here, if the user just wants a min value, that implies that scaler is 1.0
-                if(maxString.isEmpty() && scalerString.isEmpty())
-                    scalerString = "1";
-            }
+            // Special case handling here, if the user just wants a min value, that implies that scaler is 1.0
+            if(maxString.empty() && scalerString.empty())
+                scalerString = "1";
         }
     }
 
-    if(!maxString.isEmpty())
+    // maxString specifies the maximum value that can be encoded. It only
+    // applies if the encoded type is not floating point. It is possible
+    // to have a maxString without a scaler or minString. However if no scaler
+    // is specified then one will be computed based on maxString.
+    if(!maxString.empty())
     {
-        encodedMax = ShuntingYard::computeInfix(maxString, &ok);
+        encodedMax = ShuntingYard::computeInfix(parser->replaceEnumerationNameWithValue(maxString), &ok);
         if(!ok)
         {
             emitWarning("max is not a number, 1.0 assumed");
@@ -1235,30 +1549,34 @@ void ProtocolField::parse(void)
             maxString = "1";
         }
 
+        // We know at this point that the encodedType is not floating point
         if(encodedType.isSigned)
         {
-            scaler = (powf(2.0, encodedType.bits-1) - 1.0)/encodedMax;
-
-            scalerString = QString().setNum(pow2(encodedType.bits-1)-1)+ "/(" + maxString + ")";
+            // Reconstruct a scaler based on the encodedMax
+            scaler = (encodedType.getMaximumIntegerValue())/encodedMax;
+            scalerString = std::to_string(encodedType.getMaximumIntegerValue()) + "/(" + maxString + ")";
 
             // This is not exactly true, there is one more bit that could be used,
             // but this makes conciser commenting, and is clearer to the user
             encodedMin = -encodedMax;
             minString = "-" + maxString;
-        }
+
+        }// if encoded type is signed
         else
         {
-            scaler = (powf(2.0, encodedType.bits) - 1.0)/(encodedMax - encodedMin);
+            // Reconstruct a scaler based on the encodedMax and encodedMin
+            scaler = (encodedType.getMaximumIntegerValue())/(encodedMax - encodedMin);
 
+            // The string we use for documentation should be made as reasonably concise as possible
             if(encodedMin == 0.0)
             {
                 minString = "0";
-                scalerString = QString().setNum(pow2(encodedType.bits)-1)+ "/(" + maxString + ")";
+                scalerString = std::to_string(encodedType.getMaximumIntegerValue())+ "/(" + maxString + ")";
             }
             else
             {
                 // If the user gives us something like 145 for max and -5 for min, I would rather just put 150 in the documentation
-                QString denominator = "(" + maxString + " - " + minString + ")";
+                std::string denominator = "(" + maxString + " - " + minString + ")";
 
                 // Documentation is only improved if maxString and minString are simple numbers, not formulas
                 if(ShuntingYard::isNumber(maxString) && ShuntingYard::isNumber(minString))
@@ -1269,13 +1587,19 @@ void ProtocolField::parse(void)
                         denominator = getNumberString(number);
                 }
 
-                scalerString = QString().setNum(pow2(encodedType.bits)-1)+ "/" + denominator;
+                scalerString = std::to_string(encodedType.getMaximumIntegerValue())+ "/" + denominator;
             }
-        }
-    }
-    else if(!scalerString.isEmpty())
+
+        }// else if encoded type is unsigned
+
+    }// if a maxString was specified
+    else if(!scalerString.empty())
     {
-        scaler = ShuntingYard::computeInfix(scalerString, &ok);
+        // scaler specifies the multiplier to apply to the in-Memory value to
+        // produce the encoded value. Unlike minString and maxString it can
+        // apply even if the encodedType is floating point. Hence it is
+        // possible for encodedMax to be 0 while the scaler is not 1.0.
+        scaler = ShuntingYard::computeInfix(parser->replaceEnumerationNameWithValue(scalerString), &ok);
 
         if(!ok)
         {
@@ -1298,8 +1622,8 @@ void ProtocolField::parse(void)
         }
         else if(encodedType.isSigned)
         {
-            encodedMax = (powf(2.0, encodedType.bits-1) - 1.0)/scaler;
-            maxString = QString().setNum(pow2(encodedType.bits-1)-1)+ "/(" + scalerString + ")";
+            encodedMax = (encodedType.getMaximumIntegerValue())/scaler;
+            maxString = std::to_string(encodedType.getMaximumIntegerValue())+ "/(" + scalerString + ")";
 
             // This is not exactly true, there is one more bit that could be used,
             // but this makes conciser commenting, and is clearer to the user
@@ -1308,16 +1632,16 @@ void ProtocolField::parse(void)
         }
         else
         {
-            encodedMax = encodedMin + (powf(2.0, encodedType.bits) - 1.0)/scaler;
+            encodedMax = encodedMin + (encodedType.getMaximumIntegerValue())/scaler;
 
             // Make sure minString isn't empty
             if(encodedMin == 0)
             {
                 minString = "0";
-                maxString = QString().setNum(pow2(encodedType.bits)-1)+ "/(" + scalerString + ")";
+                maxString = std::to_string(encodedType.getMaximumIntegerValue())+ "/(" + scalerString + ")";
             }
             else
-                maxString = minString + " + " + QString().setNum(pow2(encodedType.bits)-1)+ "/(" + scalerString + ")";
+                maxString = minString + " + " + std::to_string(encodedType.getMaximumIntegerValue())+ "/(" + scalerString + ")";
         }
 
     }// if scaler string
@@ -1346,9 +1670,9 @@ void ProtocolField::parse(void)
     }
 
     // Just the type data
-    typeName = inMemoryType.toTypeString(enumName, support.prefix + structName);
+    typeName = inMemoryType.toTypeString(support.prefix + structName);
 
-    if(!constantString.isEmpty())
+    if(!constantString.empty())
     {
         if(inMemoryType.isStruct)
         {
@@ -1360,39 +1684,70 @@ void ProtocolField::parse(void)
     // Make sure no keyword conflicts
     checkAgainstKeywords();
 
-    // Check if the verify max string is "auto" and handle it
-    if(verifyMaxString.compare("auto", Qt::CaseInsensitive) == 0)
+    // Work out the limits that come from the encoding rules
+    if(isFloatScaling() || isIntegerScaling())
     {
-        // Automatically figure out the value of the max
-        if(maxString.isEmpty())
+        limitMinValue = encodedMin;
+        limitMaxValue = encodedMax;
+
+        if(isFloatScaling())
         {
-            // In this case we don't already have scaling information, so we need to work out the value ourselves
-            if(encodedType.isSigned)
-                verifyMaxString = QString().setNum(pow2(encodedType.bits-1)-1);
-            else
-                verifyMaxString = QString().setNum(pow2(encodedType.bits)-1);
+            limitMaxString = getNumberString(limitMaxValue, encodedType.bits);
+            limitMinString = getNumberString(limitMinValue, encodedType.bits);
+            limitMaxStringForComment = getNumberString(limitMaxValue);
+            limitMinStringForComment = getNumberString(limitMinValue);
         }
         else
-            verifyMaxString = getNumberString(encodedMax, encodedType.bits);
-
-    }// if we need to automagically determine the max verify string
-
-    // Check if the verify min string is "auto" and handle it
-    if(verifyMinString.compare("auto", Qt::CaseInsensitive) == 0)
-    {
-        // Automatically figure out the value of the min
-        if(minString.isEmpty())
         {
-            // In this case we don't already have scaling information, so we need to work out the value ourselves
-            if(encodedType.isSigned)
-                verifyMinString = QString().setNum(-1*pow2(encodedType.bits-1));
-            else
-                verifyMinString = "0";
+            // Integer scaling is interesting. Imagine the case where we encode
+            // in a signed16 number with a scaler of 8. Hence the largest value
+            // after decode will be 32767/8 = 4095.875. However if the in-Memory
+            // type is an integer then this will truncate to 4095, therefore use
+            // of the trunc() function
+            limitMaxStringForComment = limitMaxString = std::to_string((int)trunc(limitMaxValue));
+            limitMinStringForComment = limitMinString = std::to_string((int)trunc(limitMinValue));
         }
-        else
-            verifyMinString = getNumberString(encodedMin, encodedType.bits);
+    }
+    else if(encodedType.isFloat)
+    {
+        limitMinValue = encodedType.getMinimumFloatValue()/scaler;
+        limitMaxValue = encodedType.getMaximumFloatValue()/scaler;
+        limitMaxString = getNumberString(limitMaxValue, encodedType.bits);
+        limitMinString = getNumberString(limitMinValue, encodedType.bits);
+        limitMaxStringForComment = getNumberString(limitMaxValue);
+        limitMinStringForComment = getNumberString(limitMinValue);
+    }
+    else
+    {
+        limitMinValue = (double)encodedType.getMinimumIntegerValue();
+        limitMaxValue = (double)encodedType.getMaximumIntegerValue();
+        limitMaxStringForComment = limitMaxString = std::to_string((int)round(limitMaxValue));
+        limitMinStringForComment = limitMinString = std::to_string((int)round(limitMinValue));
+    }
 
-    }// if we need to automagically determine the min verify string
+    // Now handle the verify maximum value
+    if(toLower(verifyMaxString) == "auto")
+    {
+        verifyMaxString = limitMaxString;
+        hasVerifyMaxValue = true;
+    }
+    else if(!verifyMaxString.empty())
+    {
+        // Compute the verify max value if we can
+        verifyMaxValue = ShuntingYard::computeInfix(parser->replaceEnumerationNameWithValue(verifyMaxString), &hasVerifyMaxValue);
+    }
+
+    // Now handle the verify minimum value
+    if(toLower(verifyMinString) == "auto")
+    {
+        verifyMinString = limitMinString;
+        hasVerifyMinValue = true;
+    }
+    else if(!verifyMinString.empty())
+    {
+        // Compute the verify min value if we can
+        verifyMinValue = ShuntingYard::computeInfix(parser->replaceEnumerationNameWithValue(verifyMinString), &hasVerifyMinValue);
+    }
 
     // Support the case where a numeric string uses "pi" or "e".
     defaultStringForDisplay = handleNumericConstants(defaultString);
@@ -1419,13 +1774,13 @@ void ProtocolField::parse(void)
  * \param input is the input string, which may be modified
  * \return a documentation version of input
  */
-QString ProtocolField::handleNumericConstants(QString& input) const
+std::string ProtocolField::handleNumericConstants(std::string& input) const
 {
-    if(input.isEmpty())
+    if(input.empty())
         return input;
 
     bool ok;
-    QString display = input;
+    std::string display = input;
 
     // Determine if the input string is a number, which might have numeric constants (pi or e)
     ShuntingYard::computeInfix(input, &ok);
@@ -1440,12 +1795,12 @@ QString ProtocolField::handleNumericConstants(QString& input) const
 
         // For the display string we replace the symbol "pi" with the
         // appropriate value for html outputs
-        display.replace("pi", "&pi;", Qt::CaseInsensitive);
+        replaceinplace(display, "pi", "&pi;");
 
         // Change to get rid of * multiply symbol, which plays havoc with markdown
         // We put spaces around the multiply symbol, so that the html tables can
         // better reflow the resulting text
-        display.replace("*", " &times; ");
+        replaceinplace(display, "*", " &times; ");
     }
 
     return display;
@@ -1510,7 +1865,7 @@ void ProtocolField::computeEncodedLength(void)
 
                 // groupBits is visible to all fields in the group, but we only
                 // want to count it once, so we only count for the lastBitfield
-                encodedLength.addToLength(QString().setNum((bitfieldData.groupBits+7)/8), false, false, false, !defaultString.isEmpty());
+                encodedLength.addToLength(std::to_string((bitfieldData.groupBits+7)/8), false, false, false, !defaultString.empty());
 
             }// if we are the last member of the group
 
@@ -1532,11 +1887,11 @@ void ProtocolField::computeEncodedLength(void)
             if(bitfieldData.lastBitfield && ((bitcount % 8) != 0))
                 length++;
 
-            encodedLength.addToLength(QString().setNum(length), false, false, false, !defaultString.isEmpty());
+            encodedLength.addToLength(std::to_string(length), false, false, false, !defaultString.empty());
         }
     }
     else if(inMemoryType.isString)
-        encodedLength.addToLength(array, !inMemoryType.isFixedString, false, !dependsOn.isEmpty(), !defaultString.isEmpty());
+        encodedLength.addToLength(array, !inMemoryType.isFixedString, false, !dependsOn.empty(), !defaultString.empty());
     else if(inMemoryType.isStruct)
     {
         encodedLength.clear();
@@ -1545,22 +1900,20 @@ void ProtocolField::computeEncodedLength(void)
 
         // Account for array, variable array, and depends on
         if(struc != NULL)
-            encodedLength.addToLength(struc->encodedLength, array, !variableArray.isEmpty() || !variable2dArray.isEmpty(), !dependsOn.isEmpty(), array2d);
+            encodedLength.addToLength(struc->encodedLength, array, !variableArray.empty() || !variable2dArray.empty(), !dependsOn.empty(), array2d);
         else
         {
             if(is2dArray())
-                encodedLength.addToLength("getMinLengthOf" + typeName + "()*" + array + "*" + array2d, false, !variableArray.isEmpty() || !variable2dArray.isEmpty(), !dependsOn.isEmpty(), (!defaultString.isEmpty()) || overridesPrevious);
+                encodedLength.addToLength("getMinLengthOf" + typeName + "()*" + array + "*" + array2d, false, !variableArray.empty() || !variable2dArray.empty(), !dependsOn.empty(), (!defaultString.empty()) || overridesPrevious);
             else if(isArray())
-                encodedLength.addToLength("getMinLengthOf" + typeName + "()*" + array, false, !variableArray.isEmpty(), !dependsOn.isEmpty(), (!defaultString.isEmpty()) || overridesPrevious);
+                encodedLength.addToLength("getMinLengthOf" + typeName + "()*" + array, false, !variableArray.empty(), !dependsOn.empty(), (!defaultString.empty()) || overridesPrevious);
             else
-                encodedLength.addToLength("getMinLengthOf" + typeName + "()"         , false, false,                    !dependsOn.isEmpty(), (!defaultString.isEmpty()) || overridesPrevious);
+                encodedLength.addToLength("getMinLengthOf" + typeName + "()"         , false, false,                    !dependsOn.empty(), (!defaultString.empty()) || overridesPrevious);
         }
     }
     else
     {
-        QString lengthString;
-
-        lengthString.setNum(encodedType.bits / 8);
+        std::string lengthString = std::to_string(encodedType.bits / 8);
 
         // Remember that we could be encoding an array
         if(isArray())
@@ -1569,7 +1922,7 @@ void ProtocolField::computeEncodedLength(void)
         if(is2dArray())
             lengthString += "*" + array2d;
 
-        encodedLength.addToLength(lengthString, false, !variableArray.isEmpty() || !variable2dArray.isEmpty(), !dependsOn.isEmpty(), (!defaultString.isEmpty()) || overridesPrevious);
+        encodedLength.addToLength(lengthString, false, !variableArray.empty() || !variable2dArray.empty(), !dependsOn.empty(), (!defaultString.empty()) || overridesPrevious);
 
     }
 
@@ -1581,37 +1934,37 @@ void ProtocolField::checkAgainstKeywords(void)
 {
     Encodable::checkAgainstKeywords();
 
-    if(keywords.contains(enumName))
+    if(contains(keywords, inMemoryType.enumName, true))
     {
         emitWarning("enum name matches C keyword, changed to _name");
-        enumName = "_" + enumName;
+        inMemoryType.enumName = "_" + inMemoryType.enumName;
     }
 
-    if(keywords.contains(maxString))
+    if(contains(keywords, maxString, true))
     {
         emitWarning("max value matches C keyword, changed to _max");
         maxString = "_" + maxString;
     }
 
-    if(keywords.contains(minString))
+    if(contains(keywords, minString, true))
     {
         emitWarning("min value matches C keyword, changed to _min");
         minString = "_" + minString;
     }
 
-    if(keywords.contains(scalerString))
+    if(contains(keywords, scalerString, true))
     {
         emitWarning("scaler value matches C keyword, changed to _scaler");
         scalerString = "_" + scalerString;
     }
 
-    if(keywords.contains(defaultString))
+    if(contains(keywords, defaultString, true))
     {
         emitWarning("default value matches C keyword, changed to _default");
         defaultString = "_" + defaultString;
     }
 
-    if(keywords.contains(constantString))
+    if(contains(keywords, constantString, true))
     {
         emitWarning("constant value matches C keyword, changed to _constant");
         constantString = "_" + constantString;
@@ -1624,9 +1977,9 @@ void ProtocolField::checkAgainstKeywords(void)
  * Get the declaration for this field as a member of a structure
  * \return the declaration string
  */
-QString ProtocolField::getDeclaration(void) const
+std::string ProtocolField::getDeclaration(void) const
 {
-    QString output;
+    std::string output;
 
     if(isNotInMemory())
         return output;
@@ -1634,7 +1987,7 @@ QString ProtocolField::getDeclaration(void) const
     output = "    " + typeName + " " + name;
 
     if(inMemoryType.isBitfield)
-        output += " : " + QString().setNum(inMemoryType.bits);
+        output += " : " + std::to_string(inMemoryType.bits);
     else if(is2dArray())
         output += "[" + array + "][" + array2d + "]";
     else if(isArray())
@@ -1642,15 +1995,15 @@ QString ProtocolField::getDeclaration(void) const
 
     output += ";";
 
-    if(comment.isEmpty())
+    if(comment.empty())
     {
-        if(!constantString.isEmpty())
+        if(!constantString.empty())
             output += " //!< Field is encoded constant.";
     }
     else
     {
         output += " //!< " + comment;
-        if(!constantString.isEmpty())
+        if(!constantString.empty())
             output += ". Field is encoded constant.";
     }
 
@@ -1662,56 +2015,56 @@ QString ProtocolField::getDeclaration(void) const
 
 
 /*!
- * Append the include directives needed for this encodable. Mostly this is empty,
+ * push_back the include directives needed for this encodable. Mostly this is empty,
  * but for external structures or enumerations we need to bring in the include file
- * \param list is appended with any directives this encodable requires.
+ * \param list is push_backed with any directives this encodable requires.
  */
-void ProtocolField::getIncludeDirectives(QStringList& list) const
+void ProtocolField::getIncludeDirectives(std::vector<std::string>& list) const
 {
-    QString include;
+    std::string include;
 
     // Array sizes could be enumerations that need an include directive
-    if(!array.isEmpty())
+    if(!array.empty())
     {
         include = parser->lookUpIncludeName(array);
-        if(!include.isEmpty())
-            list.append(include);
+        if(!include.empty())
+            list.push_back(include);
 
         // Array sizes could be enumerations that need an include directive
-        if(!array2d.isEmpty())
+        if(!array2d.empty())
         {
             include = parser->lookUpIncludeName(array2d);
-            if(!include.isEmpty())
-                list.append(include);
+            if(!include.empty())
+                list.push_back(include);
         }
     }
 
     if(inMemoryType.isEnum || inMemoryType.isStruct)
     {
         include = parser->lookUpIncludeName(typeName);
-        if(include.isEmpty())
+        if(include.empty())
         {
             // we don't warn for enumeration include failures, they are (potentially) less serious
             if(inMemoryType.isStruct)
                 emitWarning("unknown include for \"" + typeName + "\"");
         }
         else
-            list.append(include);
+            list.push_back(include);
 
     }// if enum or struct
 
     // Only need one of each include
-    list.removeDuplicates();
+    removeDuplicates(list);
 
 }// ProtocolField::getIncludeDirectives
 
 
 /*!
- * Append the include directives needed for this encodable. Mostly this is empty,
+ * push_back the include directives needed for this encodable. Mostly this is empty,
  * but for external structures or enumerations we need to bring in the include file
- * \param list is appended with any directives this encodable requires.
+ * \param list is push_backed with any directives this encodable requires.
  */
-void ProtocolField::getInitAndVerifyIncludeDirectives(QStringList& list) const
+void ProtocolField::getInitAndVerifyIncludeDirectives(std::vector<std::string>& list) const
 {
     if(inMemoryType.isStruct)
     {
@@ -1727,9 +2080,9 @@ void ProtocolField::getInitAndVerifyIncludeDirectives(QStringList& list) const
 
 /*!
  * Return the include directives needed for this encodable's map functions
- * \param list is appended with any directives this encodable requires.
+ * \param list is push_backed with any directives this encodable requires.
  */
-void ProtocolField::getMapIncludeDirectives(QStringList& list) const
+void ProtocolField::getMapIncludeDirectives(std::vector<std::string>& list) const
 {
     if(inMemoryType.isStruct)
     {
@@ -1745,9 +2098,9 @@ void ProtocolField::getMapIncludeDirectives(QStringList& list) const
 
 /*!
  * Return the include directives needed for this encodable's compare functions
- * \param list is appended with any directives this encodable requires.
+ * \param list is push_backed with any directives this encodable requires.
  */
-void ProtocolField::getCompareIncludeDirectives(QStringList& list) const
+void ProtocolField::getCompareIncludeDirectives(std::vector<std::string>& list) const
 {
     if(inMemoryType.isStruct)
     {
@@ -1763,9 +2116,9 @@ void ProtocolField::getCompareIncludeDirectives(QStringList& list) const
 
 /*!
  * Return the include directives needed for this encodable's print functions
- * \param list is appended with any directives this encodable requires.
+ * \param list is push_backed with any directives this encodable requires.
  */
-void ProtocolField::getPrintIncludeDirectives(QStringList& list) const
+void ProtocolField::getPrintIncludeDirectives(std::vector<std::string>& list) const
 {
     if(inMemoryType.isStruct)
     {
@@ -1783,7 +2136,7 @@ void ProtocolField::getPrintIncludeDirectives(QStringList& list) const
  * Return the signature of this field in an encode function signature
  * \return The encode signature of this field
  */
-QString ProtocolField::getEncodeSignature(void) const
+std::string ProtocolField::getEncodeSignature(void) const
 {
     if(isNotEncoded() || isNotInMemory() || isConstant())
         return "";
@@ -1802,38 +2155,38 @@ QString ProtocolField::getEncodeSignature(void) const
  * Get details needed to produce documentation for this encodable.
  * \param outline gives the paragraph numbers for all the fields up to this one.
  * \param startByte is the starting byte location of this encodable, which will be updated for the following encodable.
- * \param bytes is appended for the byte range of this encodable.
- * \param names is appended for the name of this encodable.
- * \param encodings is appended for the encoding of this encodable.
- * \param repeats is appended for the array information of this encodable.
- * \param comments is appended for the description of this encodable.
+ * \param bytes is push_backed for the byte range of this encodable.
+ * \param names is push_backed for the name of this encodable.
+ * \param encodings is push_backed for the encoding of this encodable.
+ * \param repeats is push_backed for the array information of this encodable.
+ * \param comments is push_backed for the description of this encodable.
  */
-void ProtocolField::getDocumentationDetails(QList<int>& outline, QString& startByte, QStringList& bytes, QStringList& names, QStringList& encodings, QStringList& repeats, QStringList& comments) const
+void ProtocolField::getDocumentationDetails(std::vector<int>& outline, std::string& startByte, std::vector<std::string>& bytes, std::vector<std::string>& names, std::vector<std::string>& encodings, std::vector<std::string>& repeats, std::vector<std::string>& comments) const
 {
-    QString description;
-    QString maxEncodedLength = encodedLength.maxEncodedLength;
+    std::string description;
+    std::string maxEncodedLength = encodedLength.maxEncodedLength;
 
     if(encodedType.isNull || hidden)
         return;
 
     // See if we can replace any enumeration names with values
-    parser->replaceEnumerationNameWithValue(maxEncodedLength);
+    maxEncodedLength = parser->replaceEnumerationNameWithValue(maxEncodedLength);
 
     // The byte after this one
-    QString nextStartByte = EncodedLength::collapseLengthString(startByte + "+" + maxEncodedLength);
+    std::string nextStartByte = EncodedLength::collapseLengthString(startByte + "+" + maxEncodedLength);
 
     // The length data
     if(encodedType.isBitfield)
     {
-        QString range;
+        std::string range;
 
         // the starting bit count is the full count, not the count in the byte
         int startCount = bitfieldData.startingBitCount % 8;
 
-        if(startByte.isEmpty())
-            range = "0:" + QString().setNum(7 - startCount);
+        if(startByte.empty())
+            range = "0:" + std::to_string(7 - startCount);
         else
-            range = startByte + ":" + QString().setNum(7 - startCount);
+            range = startByte + ":" + std::to_string(7 - startCount);
 
         if(encodedType.bits > 1)
         {
@@ -1841,76 +2194,75 @@ void ProtocolField::getDocumentationDetails(QList<int>& outline, QString& startB
 
             int byteCount = endCount / 8;
 
-            QString endByte = EncodedLength::collapseLengthString(startByte + "+" + QString().setNum(byteCount), true);
+            std::string endByte = EncodedLength::collapseLengthString(startByte + "+" + std::to_string(byteCount), true);
 
-            range += "..." + endByte + ":" + QString().setNum(7 - (endCount%8));
+            range += "..." + endByte + ":" + std::to_string(7 - (endCount%8));
         }
 
-        bytes.append(range);
+        bytes.push_back(range);
     }
     else
     {
-        if(maxEncodedLength.isEmpty() || (maxEncodedLength.compare("1") == 0))
-            bytes.append(startByte);
+        if(maxEncodedLength.empty() || (maxEncodedLength.compare("1") == 0))
+            bytes.push_back(startByte);
         else
         {
-            QString endByte = EncodedLength::subtractOneFromLengthString(nextStartByte);
+            std::string endByte = EncodedLength::subtractOneFromLengthString(nextStartByte);
 
             // The range of the data
-            bytes.append(startByte + "..." + endByte);
+            bytes.push_back(startByte + "..." + endByte);
         }
     }
 
     // The name information
-    outline.last() += 1;
-    QString outlineString;
-    outlineString.setNum(outline.at(0));
-    for(int i = 1; i < outline.size(); i++)
-        outlineString += "." + QString().setNum(outline.at(i));
+    outline.back() += 1;
+    std::string outlineString = std::to_string(outline.at(0));
+    for(std::size_t i = 1; i < outline.size(); i++)
+        outlineString += "." + std::to_string(outline.at(i));
 
     if(inMemoryType.isEnum)
     {
         // Link to the enumeration
-        outlineString += ")[" + title +"](#" + enumName + ")";
+        outlineString += ")[" + title +"](#" + inMemoryType.enumName + ")";
     }
     else
         outlineString += ")" + title;
 
-    names.append(outlineString);
+    names.push_back(outlineString);
 
     if(inMemoryType.isStruct)
     {
         // Encoding is blank for structures
-        encodings.append(QString());
+        encodings.push_back(std::string());
 
         // Repeats
-        repeats.append(getRepeatsDocumentationDetails());
+        repeats.push_back(getRepeatsDocumentationDetails());
 
         // Fourth column is the commenting
         description += comment;
 
-        if(!dependsOn.isEmpty())
+        if(!dependsOn.empty())
         {
-            if(!description.endsWith('.'))
+            if(!endsWith(description, "."))
                 description += ".";
 
-            if(dependsOnValue.isEmpty())
+            if(dependsOnValue.empty())
                 description += " Only included if " + dependsOn + " is non-zero.";
             else
             {
-                if(dependsOnCompare.isEmpty())
+                if(dependsOnCompare.empty())
                     description += " Only included if " + dependsOn + " equal to " + dependsOnValue + ".";
                 else
                     description += " Only included if " + dependsOn + " " + dependsOnCompare + " " + dependsOnValue + ".";
             }
         }
 
-        if(description.isEmpty())
-            comments.append(QString());
+        if(description.empty())
+            comments.push_back(std::string());
         else
-            comments.append(description);
+            comments.push_back(description);
 
-        QString subStartByte = startByte;
+        std::string subStartByte = startByte;
 
         // Now go get the substructure stuff
         parser->getStructureSubDocumentationDetails(typeName, outline, subStartByte, bytes, names, encodings, repeats, comments);
@@ -1921,38 +2273,38 @@ void ProtocolField::getDocumentationDetails(QList<int>& outline, QString& startB
         // The encoding
         if(encodedType.isFixedString)
         {
-            encodings.append("Zero terminated string of exactly " + array + " bytes");
-            repeats.append(QString());
+            encodings.push_back("Zero terminated string of exactly " + array + " bytes");
+            repeats.push_back(std::string());
         }
         else if( encodedType.isString)
         {
-            encodings.append("Zero-terminated string up to " + array + " bytes");
-            repeats.append(QString());
+            encodings.push_back("Zero-terminated string up to " + array + " bytes");
+            repeats.push_back(std::string());
         }
         else
         {
             if(encodedType.isBitfield)
-                encodings.append("B" + QString().setNum(encodedType.bits));
+                encodings.push_back("B" + std::to_string(encodedType.bits));
             else if(encodedType.isFloat)
             {
                 if(encodedType.bits < 32)
-                    encodings.append("F" + QString().setNum(encodedType.bits) + ":" + QString::number(encodedType.sigbits));
+                    encodings.push_back("F" + std::to_string(encodedType.bits) + ":" + std::to_string(encodedType.sigbits));
                 else
-                    encodings.append("F" + QString().setNum(encodedType.bits));
+                    encodings.push_back("F" + std::to_string(encodedType.bits));
             }
             else if(encodedType.isSigned)
-                encodings.append("I" + QString().setNum(encodedType.bits));
+                encodings.push_back("I" + std::to_string(encodedType.bits));
             else
-                encodings.append("U" + QString().setNum(encodedType.bits));
+                encodings.push_back("U" + std::to_string(encodedType.bits));
 
             // Third column is the repeat/array column
-            repeats.append(getRepeatsDocumentationDetails());
+            repeats.push_back(getRepeatsDocumentationDetails());
         }
 
         // Fourth column is the commenting
         if(inMemoryType.isNull)
         {
-            if(!comment.isEmpty())
+            if(!comment.empty())
                 description += comment;
             else
             {
@@ -1965,47 +2317,57 @@ void ProtocolField::getDocumentationDetails(QList<int>& outline, QString& startB
         else
             description += comment;
 
-        if(!description.isEmpty() && !description.endsWith('.'))
+        if(!description.empty() && !endsWith(description, "."))
             description += ".";
 
-        if((encodedMax > encodedMin) && (encodedType.isFloat))
-            description += "<br>Scaled by " + scalerString + ".";
-        else if(isFloatScaling() || isIntegerScaling())
-            description += "<br>Scaled by " + scalerString + " from " + getDisplayNumberString(encodedMin) + " to " + getDisplayNumberString(encodedMax) + ".";
+        if(support.limitonencode && (!verifyMinStringForDisplay.empty() || !verifyMaxStringForDisplay.empty()))
+        {
+            if(!verifyMinStringForDisplay.empty() && !verifyMaxStringForDisplay.empty())
+                description += "<br>Value is limited on encode from " + verifyMinStringForDisplay + " to " + verifyMaxStringForDisplay + ".";
+            else if(verifyMinStringForDisplay.empty())
+                description += "<br>Value is limited on encode to be less than or equal to " + verifyMaxStringForDisplay + ".";
+            else
+                description += "<br>Value is limited on encode to be greater than or equal to " + verifyMinStringForDisplay + ".";
+        }
 
-        if(!constantString.isEmpty())
+        if(isFloatScaling() || isIntegerScaling())
+            description += "<br>Scaled by " + scalerString + " from " + getDisplayNumberString(encodedMin) + " to " + getDisplayNumberString(encodedMax) + ".";
+        else if(!scalerString.empty() && (encodedType.isFloat))
+            description += "<br>Scaled by " + scalerString + ".";
+
+        if(!constantString.empty())
             description += "<br>Data are given constant value on encode " + constantStringForDisplay + ".";
 
-        if(!dependsOn.isEmpty())
+        if(!dependsOn.empty())
         {
-            if(dependsOnValue.isEmpty())
+            if(dependsOnValue.empty())
                 description += "<br>Only included if " + dependsOn + " is non-zero.";
             else
             {
-                if(dependsOnCompare.isEmpty())
+                if(dependsOnCompare.empty())
                     description += "<br>Only included if " + dependsOn + " equal to " + dependsOnValue + ".";
                 else
                     description += "<br>Only included if " + dependsOn + " " + dependsOnCompare + " " + dependsOnValue + ".";
             }
         }
 
-        if(!defaultString.isEmpty())
+        if(!defaultString.empty())
             description += "<br>This field is optional. If it is not included then the value is assumed to be " + defaultStringForDisplay + ".";
 
         if(overridesPrevious)
             description += "<br>This field overrides the previous field of the same name, if the packet is long enough.";
 
-        for (int i=0;i<extraInfoNames.count();i++)
+        for (std::size_t i = 0; i < extraInfoNames.size(); i++)
         {
-            if ((extraInfoValues.count() > i) && (!extraInfoValues.at(i).isEmpty()))
+            if ((extraInfoValues.size() > i) && (!extraInfoValues.at(i).empty()))
                 description += "<br>" + extraInfoNames.at(i) + ": " + extraInfoValues.at(i) + ".";
         }
 
         // StringList cannot be empty
-        if(description.isEmpty())
-            comments.append(QString());
+        if(description.empty())
+            comments.push_back(std::string());
         else
-            comments.append(description);
+            comments.push_back(description);
 
     }// else if not structure
 
@@ -2022,11 +2384,12 @@ void ProtocolField::getDocumentationDetails(QList<int>& outline, QString& startB
  * \param isStructureMember should be true if the left hand side is a
  *        member of a user structure, else the left hand side is a pointer
  *        to the inMemoryType
+ * \param enforcelimit should be true to perform limiting (if verify limits are provided) as part of the encode.
  * \return The string to add to the source file that encodes this field.
  */
-QString ProtocolField::getEncodeString(bool isBigEndian, int* bitcount, bool isStructureMember) const
+std::string ProtocolField::getEncodeString(bool isBigEndian, int* bitcount, bool isStructureMember) const
 {
-    QString output;
+    std::string output;
 
     if(encodedType.isBitfield)
     {
@@ -2057,9 +2420,9 @@ QString ProtocolField::getEncodeString(bool isBigEndian, int* bitcount, bool isS
  * \param defaultEnabled should be true to handle defaults
  * \return The string to add to the source file that encodes this field.
  */
-QString ProtocolField::getDecodeString(bool isBigEndian, int* bitcount, bool isStructureMember, bool defaultEnabled) const
+std::string ProtocolField::getDecodeString(bool isBigEndian, int* bitcount, bool isStructureMember, bool defaultEnabled) const
 {
-    QString output;
+    std::string output;
 
     if(encodedType.isBitfield)
         output += getDecodeStringForBitfield(bitcount, isStructureMember, defaultEnabled);
@@ -2087,7 +2450,7 @@ bool ProtocolField::hasVerify(void) const
     }
     else
     {
-        if(verifyMaxString.isEmpty() && verifyMinString.isEmpty())
+        if(verifyMaxString.empty() && verifyMinString.empty())
             return false;
         else
             return true;
@@ -2109,7 +2472,7 @@ bool ProtocolField::hasInit(void) const
     }
     else
     {
-        if(initialValueString.isEmpty())
+        if(initialValueString.empty())
             return false;
         else
             return true;
@@ -2119,79 +2482,81 @@ bool ProtocolField::hasInit(void) const
 
 
 /*!
- * Get the string used for verifying this field. If there is no verification data the string will be empty
- * \param isStructureMember should be true if this member is referenced by structure
+ * Get the string used for verifying this field. If there is no verification data the string will be empty.
  * \return the string used for verifying this field, which may be blank
  */
-QString ProtocolField::getVerifyString(bool isStructureMember) const
+std::string ProtocolField::getVerifyString(void) const
 {
     if(!hasVerify())
-        return QString();
+        return std::string();
 
     // No verify for null or string
     if(inMemoryType.isNull || inMemoryType.isString)
-        return QString();
+        return std::string();
+
+    std::string access;
+    std::string spacing = TAB_IN;
+    std::string arrayspacing;
+    std::string output;
+
+    if(!comment.empty())
+        output += spacing + "// " + comment + "\n";
+
+    output += getEncodeArrayIterationCode(spacing, true);
 
     if(inMemoryType.isStruct)
     {
-        QString output;
-        QString access;
-
-        if(!comment.isEmpty())
-            output += TAB_IN + "// " + comment + "\n";
+        if(support.language == ProtocolSupport::c_language)
+            access = "&_pg_user->" + name;
+        else
+            access = name;  // in this case, name is already pointer, so we don't need "&"
 
         if(isArray())
         {
-            QString spacing;
-            output += TAB_IN + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
+            arrayspacing += TAB_IN;
 
-            if(isStructureMember)
+            if(support.language == ProtocolSupport::c_language)
                 access = "&_pg_user->" + name + "[_pg_i]";
             else
-                access = "&" + name + "[_pg_i]";
+                access = name + "[_pg_i]";
 
             // Handle 2D array
             if(is2dArray())
             {
                 access += "[_pg_j]";
-                spacing += TAB_IN;
-                output += TAB_IN + TAB_IN + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
+                arrayspacing += TAB_IN;
             }
+        }
 
-            output += TAB_IN + TAB_IN + spacing + "if(!verify" + typeName + "(" + access + "))\n";
-            output += TAB_IN + TAB_IN + spacing + TAB_IN + "_pg_good = 0;\n";
+        // This calls the verify function
+        if(support.language == ProtocolSupport::c_language)
+        {
+            output += spacing + arrayspacing + "if(!verify" + typeName + "(" + access + "))\n";
+            output += spacing + arrayspacing + TAB_IN + "_pg_good = 0;\n";
         }
         else
         {
-            if(isStructureMember)
-                access = "&_pg_user->" + name;
-            else
-                access = name;  // in this case, name is already pointer, so we don't need "&"
-
-            output += TAB_IN + "if(!verify" + typeName + "(" + access + "))\n";
-            output += TAB_IN + TAB_IN + "_pg_good = 0;\n";
+            output += spacing + arrayspacing + "if(!" + access + ".verify())\n";
+            output += spacing + arrayspacing + TAB_IN + "_pg_good = false;\n";
         }
 
-        return output;
-
-    }
+    }// if struct being verified
     else
     {
-        if(verifyMaxString.isEmpty() && verifyMinString.isEmpty())
-            return QString();
+        std::string failedvalue = "false";
+        if(support.language == ProtocolSupport::c_language)
+            failedvalue = "0";
 
-        QString output;
-        QString access;
-
-        if(!comment.isEmpty())
-            output += TAB_IN + "// " + comment + "\n";
+        if(support.language == ProtocolSupport::c_language)
+            access = "_pg_user->" + name;
+        else
+            access = name;
 
         if(isArray())
         {
-            QString spacing;
-            output += TAB_IN + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
+            arrayspacing += TAB_IN;
 
-            if(isStructureMember)
+            if(support.language == ProtocolSupport::c_language)
                 access = "_pg_user->" + name + "[_pg_i]";
             else
                 access = name + "[_pg_i]";
@@ -2200,123 +2565,99 @@ QString ProtocolField::getVerifyString(bool isStructureMember) const
             if(is2dArray())
             {
                 access += "[_pg_j]";
-                spacing += TAB_IN;
-                output += TAB_IN + TAB_IN + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
+                arrayspacing += TAB_IN;
             }
+        }
 
-            output += TAB_IN + spacing + "{\n";
-            if(!verifyMinString.isEmpty())
-            {
-                output += TAB_IN + TAB_IN + spacing + "if(" + access + " < " + verifyMinString + ")\n";
-                output += TAB_IN + TAB_IN + spacing + "{\n";
-                output += TAB_IN + TAB_IN + spacing + TAB_IN + access + " = " + verifyMinString + ";\n";
-                output += TAB_IN + TAB_IN + spacing + TAB_IN + "_pg_good = 0;\n";
-                output += TAB_IN + TAB_IN + spacing + "}\n";
-            }
-
-            if(!verifyMaxString.isEmpty())
-            {
-                QString choice = "else if(";
-                if(verifyMinString.isEmpty())
-                    choice = "if(";
-
-                output += TAB_IN + TAB_IN + spacing + choice + access + " > " + verifyMaxString + ")\n";
-                output += TAB_IN + TAB_IN + spacing + "{\n";
-                output += TAB_IN + TAB_IN + spacing + TAB_IN + access + " = " + verifyMaxString + ";\n";
-                output += TAB_IN + TAB_IN + spacing + TAB_IN + "_pg_good = 0;\n";
-                output += TAB_IN + TAB_IN + spacing + "}\n";
-            }
-
-            output += TAB_IN + spacing + "}\n";
-
-        }// if field is array
-        else
+        if(!verifyMinString.empty())
         {
-            if(isStructureMember)
-                access = "_pg_user->" + name;
-            else
-                access = "*" + name;
+            output += spacing + arrayspacing + "if(" + access + " < " + verifyMinString + ")\n";
+            output += spacing + arrayspacing + "{\n";
+            output += spacing + arrayspacing + TAB_IN + access + " = " + verifyMinString + ";\n";
+            output += spacing + arrayspacing + TAB_IN + "_pg_good = " + failedvalue + ";\n";
+            output += spacing + arrayspacing + "}\n";
+        }
 
-            if(!verifyMinString.isEmpty())
-            {
-                output += TAB_IN + "if(" + access + " < " + verifyMinString + ")\n";
-                output += TAB_IN + "{\n";
-                output += TAB_IN + TAB_IN + access + " = " + verifyMinString + ";\n";
-                output += TAB_IN + TAB_IN + "_pg_good = 0;\n";
-                output += TAB_IN + "}\n";
-            }
+        if(!verifyMaxString.empty())
+        {
+            std::string choice = "else if(";
+            if(verifyMinString.empty())
+                choice = "if(";
 
-            if(!verifyMaxString.isEmpty())
-            {
-                QString choice = "else if(";
-                if(verifyMinString.isEmpty())
-                    choice = "if(";
-
-                output += TAB_IN + choice + access + " > " + verifyMaxString + ")\n";
-                output += TAB_IN + "{\n";
-                output += TAB_IN + TAB_IN + access + " = " + verifyMaxString + ";\n";
-                output += TAB_IN + TAB_IN + "_pg_good = 0;\n";
-                output += TAB_IN + "}\n";
-            }
-
-        }// else if not array
-
-        return output;
+            output += spacing + arrayspacing + choice + access + " > " + verifyMaxString + ")\n";
+            output += spacing + arrayspacing + "{\n";
+            output += spacing + arrayspacing + TAB_IN + access + " = " + verifyMaxString + ";\n";
+            output += spacing + arrayspacing + TAB_IN + "_pg_good = " + failedvalue + ";\n";
+            output += spacing + arrayspacing + "}\n";
+        }
 
     }// else if not struct
+
+    return output;
 
 }// ProtocolField::getVerifyString
 
 
 /*!
-* Get the string used for coparing this field.
-* \param isStructureMember should be true to indicate this field is accessed as a member structure
+* Get the string used for comparing this field.
 * \return the string used to compare this field, which may be empty
 */
-QString ProtocolField::getComparisonString(bool isStructureMember) const
+std::string ProtocolField::getComparisonString(void) const
 {
-    QString output;
+    std::string output;
 
     // No comparison if nothing is in memory or if not encoded
     if(inMemoryType.isNull || encodedType.isNull)
         return output;
 
-    QString access1, access2;
-
-    if(isStructureMember)
-    {
-        access1 = "_pg_user1->" + name;
-        access2 = "_pg_user2->" + name;
-    }
-    else
-    {
-        access1 = name + "_1";
-        access2 = name + "_2";
-    }
-
     if(inMemoryType.isString)
     {
-        output += TAB_IN + "if(QString::compare(" + access1 + ", " + access2 + ") != 0)\n";
+        if(support.language == ProtocolSupport::c_language)
+            output += TAB_IN + "if(std::string(_pg_user1->" + name + ").compare(_pg_user2->" + name + ") != 0)\n";
+        else
+            output += TAB_IN + "if(std::string(" + name + ").compare(_pg_user->" + name + ") != 0)\n";
+
         output += TAB_IN + TAB_IN + "_pg_report += _pg_prename + \":" + name + " strings differ\\n\";\n";
     }
     else
     {
-        QString spacing = TAB_IN;
+        std::string spacing = TAB_IN;
         bool closearraytest = false;
         bool closearraytest2 = false;
         bool closeforloop = false;
         bool closeforloop2 = false;
 
+        std::string access1, access2;
+        if(support.language == ProtocolSupport::c_language)
+        {
+            access1 = "_pg_user1->" + name;
+            access2 = "_pg_user2->" + name;
+        }
+        else
+        {
+            access1 = name;
+            access2 = "_pg_user->" + name;
+        }
+
+
         if(isArray())
         {
-            if(!variableArray.isEmpty() && isStructureMember)
+            if(!variableArray.empty())
             {
-                output += spacing + "if(_pg_user1->" + variableArray + " == _pg_user2->" + variableArray + ")\n";
+                if(support.language == ProtocolSupport::c_language)
+                    output += spacing + "if(_pg_user1->" + variableArray + " == _pg_user2->" + variableArray + ")\n";
+                else
+                    output += spacing + "if(" + variableArray + " == _pg_user->" + variableArray + ")\n";
+
                 output += spacing + "{\n";
                 spacing += TAB_IN;
                 closearraytest = true;
 
-                output += spacing + "for(_pg_i = 0; (_pg_i < " + array + ") && (_pg_i < (unsigned)_pg_user1->" + variableArray + "); _pg_i++)\n";
+                if(support.language == ProtocolSupport::c_language)
+                    output += spacing + "for(_pg_i = 0; (_pg_i < " + array + ") && (_pg_i < (unsigned)_pg_user1->" + variableArray + "); _pg_i++)\n";
+                else
+                    output += spacing + "for(_pg_i = 0; (_pg_i < " + array + ") && (_pg_i < (unsigned)" + variableArray + "); _pg_i++)\n";
+
                 output += spacing + "{\n";
                 spacing += TAB_IN;
                 closeforloop = true;
@@ -2327,20 +2668,28 @@ QString ProtocolField::getComparisonString(bool isStructureMember) const
                 spacing += TAB_IN;
             }
 
-            access1 = access1 + "[_pg_i]";
-            access2 = access2 + "[_pg_i]";
+            access1 += "[_pg_i]";
+            access2 += "[_pg_i]";
         }
 
         if(is2dArray())
         {
-            if(!variable2dArray.isEmpty() && isStructureMember)
+            if(!variable2dArray.empty())
             {
-                output += spacing + "if(_pg_user1->" + variable2dArray + " == _pg_user2->" + variable2dArray + ")\n";
+                if(support.language == ProtocolSupport::c_language)
+                    output += spacing + "if(_pg_user1->" + variable2dArray + " == _pg_user2->" + variable2dArray + ")\n";
+                else
+                    output += spacing + "if(" + variable2dArray + " == _pg_user->" + variable2dArray + ")\n";
+
                 output += spacing + "{\n";
                 spacing += TAB_IN;
                 closearraytest2 = true;
 
-                output += spacing + "for(_pg_j = 0; (_pg_j < " + array2d + ") && (_pg_j < (unsigned)_pg_user1->" + variable2dArray + "); _pg_j++)\n";
+                if(support.language == ProtocolSupport::c_language)
+                    output += spacing + "for(_pg_j = 0; (_pg_j < " + array2d + ") && (_pg_j < (unsigned)_pg_user1->" + variable2dArray + "); _pg_j++)\n";
+                else
+                    output += spacing + "for(_pg_j = 0; (_pg_j < " + array2d + ") && (_pg_j < (unsigned)" + variable2dArray + "); _pg_j++)\n";
+
                 output += spacing + "{\n";
                 spacing += TAB_IN;
                 closeforloop2 = true;
@@ -2351,22 +2700,28 @@ QString ProtocolField::getComparisonString(bool isStructureMember) const
                 spacing += TAB_IN;
             }
 
-            access1 = access1 + "[_pg_j]";
-            access2 = access2 + "[_pg_j]";
+            access1 += "[_pg_j]";
+            access2 += "[_pg_j]";
         }
 
         if(inMemoryType.isStruct)
         {
-            output += spacing + "_pg_report += compare" + typeName + "(_pg_prename + \":" + name + "\"";
+            if(support.language == ProtocolSupport::c_language)
+                output += spacing + "_pg_report += compare" + typeName + "(_pg_prename + \":" + name + "\"";
+            else
+                output += spacing + "_pg_report += " + access1 + ".compare(_pg_prename + \":" + name + "\"";
 
             if(isArray())
-                output += " + \"[\" + QString::number(_pg_i) + \"]\"";
+                output += " + \"[\" + std::to_string(_pg_i) + \"]\"";
 
             if(is2dArray())
-                output += " + \"[\" + QString::number(_pg_j) + \"]\"";
+                output += " + \"[\" + std::to_string(_pg_j) + \"]\"";
 
             // Structure compare we need to pass the address of the structure, not the object
-            output += ", &" + access1 + ", &" + access2 + ");\n";
+            if(support.language == ProtocolSupport::c_language)
+                output += ", &" + access1 + ", &" + access2 + ");\n";
+            else
+                output += ", &" + access2 + ");\n";
         }
         else
         {
@@ -2378,28 +2733,32 @@ QString ProtocolField::getComparisonString(bool isStructureMember) const
 
             // The _pg_report needs to include the array indices
             if(isArray())
-                output += " + \"[\" + QString::number(_pg_i) + \"]\"";
+                output += " + \"[\" + std::to_string(_pg_i) + \"]\"";
 
             if(is2dArray())
-                output += " + \"[\" + QString::number(_pg_j) + \"]\"";
+                output += " + \"[\" + std::to_string(_pg_j) + \"]\"";
 
-            // And finally the values that go into the _pg_report
-            if(inMemoryType.isFloat || !printScalerString.isEmpty())
-                output += " + \" '\" + QString::number(" + access1 + printScalerString + ", 'g', 16) + \"' '\" + QString::number(" + access2 + printScalerString + ", 'g', 16) + \"'\\n\";\n";
+            // And finally the values go into the _pg_report
+            if(!printScalerString.empty())
+                output += " + \" '\" + to_formatted_string(" + access1 + printScalerString + ", 16) + \"' '\" + to_formatted_string(" + access2 + printScalerString + ", 16) + \"'\\n\";\n";
+            else if(inMemoryType.isFloat && (inMemoryType.bits > 32))
+                output += " + \" '\" + to_formatted_string(" + access1 + ", 16) + \"' '\" + to_formatted_string(" + access2 + ", 16) + \"'\\n\";\n";
+            else if(inMemoryType.isFloat)
+                output += " + \" '\" + to_formatted_string(" + access1 + ", 7) + \"' '\" + to_formatted_string(" + access2 + ", 7) + \"'\\n\";\n";
             else
-                output += " + \" '\" + QString::number(" + access1 + ") + \"' '\" + QString::number(" + access2 + ") + \"'\\n\";\n";
+                output += " + \" '\" + std::to_string(" + access1 + ") + \"' '\" + std::to_string(" + access2 + ") + \"'\\n\";\n";
 
         }// else not a struct
 
         if(closeforloop2)
         {
-            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
+            spacing.erase(spacing.size() - TAB_IN.size(), TAB_IN.size());
             output += spacing + "}\n";
         }
 
         if(closearraytest2)
         {
-            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
+            spacing.erase(spacing.size() - TAB_IN.size(), TAB_IN.size());
             output += spacing + "}\n";
             output += spacing + "else\n";
             output += spacing + TAB_IN + "_pg_report += _pg_prename + \":" + name + " 2nd array dimension differs, array not compared\\n\";\n";
@@ -2407,13 +2766,13 @@ QString ProtocolField::getComparisonString(bool isStructureMember) const
 
         if(closeforloop)
         {
-            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
+            spacing.erase(spacing.size() - TAB_IN.size(), TAB_IN.size());
             output += spacing + "}\n";
         }
 
         if(closearraytest)
         {
-            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
+            spacing.erase(spacing.size() - TAB_IN.size(), TAB_IN.size());
             output += spacing + "}\n";
             output += spacing + "else\n";
             output += spacing + TAB_IN + "_pg_report += _pg_prename + \":" + name + " array dimension differs, array not compared\\n\";\n";
@@ -2428,82 +2787,49 @@ QString ProtocolField::getComparisonString(bool isStructureMember) const
 
 /*!
  * Get the string used for text printing this field.
- * \param isStructureMember should be true to indicate this field is accessed as a member structure
  * \return the string used to print this field as text, which may be empty
  */
-QString ProtocolField::getTextPrintString(bool isStructureMember) const
+std::string ProtocolField::getTextPrintString(void) const
 {
-    QString output;
+    std::string output;
 
     // No print if nothing is in memory or if not encoded
     if(inMemoryType.isNull || encodedType.isNull)
         return output;
 
-    QString access;
-
-    if(isStructureMember)
-        access = "_pg_user->" + name;
-    else
-        access = name;
-
     if(inMemoryType.isString)
     {
-        output += TAB_IN + "_pg_report += _pg_prename + \":" + name + " '\" + QString(" + access + ") + \"'\\n\";\n";
+        output += TAB_IN + "_pg_report += _pg_prename + \":" + name + " '\" + std::string(" + getEncodeFieldAccess(true) + ") + \"'\\n\";\n";
     }
     else
     {
-        QString spacing = TAB_IN;
-        bool closeforloop = false;
-        bool closeforloop2 = false;
+        std::string spacing = TAB_IN;
 
+        output += getEncodeArrayIterationCode(spacing, true);
         if(isArray())
         {
-            if(!variableArray.isEmpty() && isStructureMember)
-            {
-                output += spacing + "for(_pg_i = 0; (_pg_i < " + array + ") && (_pg_i < (unsigned)_pg_user->" + variableArray + "); _pg_i++)\n";
-                output += spacing + "{\n";
+            spacing += TAB_IN;
+            if(is2dArray())
                 spacing += TAB_IN;
-                closeforloop = true;
-            }
-            else
-            {
-                output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
-                spacing += TAB_IN;
-            }
-
-            access = access + "[_pg_i]";
-        }
-
-        if(is2dArray())
-        {
-            if(!variable2dArray.isEmpty() && isStructureMember)
-            {
-                output += spacing + "for(_pg_j = 0; (_pg_j < " + array2d + ") && (_pg_j < (unsigned)_pg_user->" + variable2dArray + "); _pg_j++)\n";
-                output += spacing + "{\n";
-                spacing += TAB_IN;
-                closeforloop2 = true;
-            }
-            else
-            {
-                output += spacing + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
-                spacing += TAB_IN;
-            }
-
-            access = access + "[_pg_j]";
         }
 
         if(inMemoryType.isStruct)
         {
-            output += spacing + "_pg_report += textPrint" + typeName + "(_pg_prename + \":" + name + "\"";
+            if(support.language == ProtocolSupport::c_language)
+                output += spacing + "_pg_report += textPrint" + typeName + "(_pg_prename + \":" + name + "\"";
+            else
+                output += spacing + "_pg_report += " + getEncodeFieldAccess(true) + ".textPrint(_pg_prename + \":" + name + "\"";
 
             if(isArray())
-                output += " + \"[\" + QString::number(_pg_i) + \"]\"";
+                output += " + \"[\" + std::to_string(_pg_i) + \"]\"";
 
             if(is2dArray())
-                output += " + \"[\" + QString::number(_pg_j) + \"]\"";
+                output += " + \"[\" + std::to_string(_pg_j) + \"]\"";
 
-            // Structure print we need to pass the address of the structure, not the object
-            output += ", &" + access + ");\n";
+            if(support.language == ProtocolSupport::c_language)
+                output += ", " + getEncodeFieldAccess(true);
+
+            output += ");\n";
         }
         else
         {
@@ -2512,30 +2838,22 @@ QString ProtocolField::getTextPrintString(bool isStructureMember) const
 
             // The _pg_report needs to include the array indices
             if(isArray())
-                output += " + \"[\" + QString::number(_pg_i) + \"]\"";
+                output += " + \"[\" + std::to_string(_pg_i) + \"]\"";
 
             if(is2dArray())
-                output += " + \"[\" + QString::number(_pg_j) + \"]\"";
+                output += " + \"[\" + std::to_string(_pg_j) + \"]\"";
 
             // And finally the values go into the _pg_report
-            if(inMemoryType.isFloat || !printScalerString.isEmpty())
-                output += " + \" '\" + QString::number(" + access + printScalerString + ", 'g', 16) + \"'\\n\";\n";
+            if(!printScalerString.empty())
+                output += " + \" '\" +  to_formatted_string(" + getEncodeFieldAccess(true) + printScalerString + ", 16) + \"'\\n\";\n";
+            else if(inMemoryType.isFloat && (inMemoryType.bits > 32))
+                output += " + \" '\" +  to_formatted_string(" + getEncodeFieldAccess(true) + ", 16) + \"'\\n\";\n";
+            else if(inMemoryType.isFloat)
+                output += " + \" '\" +  to_formatted_string(" + getEncodeFieldAccess(true) + ", 7) + \"'\\n\";\n";
             else
-                output += " + \" '\" + QString::number(" + access + ") + \"'\\n\";\n";
+                output += " + \" '\" + std::to_string(" + getEncodeFieldAccess(true) + ") + \"'\\n\";\n";
 
         }// else not a struct
-
-        if(closeforloop2)
-        {
-            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
-            output += spacing + "}\n";
-        }
-
-        if(closeforloop)
-        {
-            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
-            output += spacing + "}\n";
-        }
 
     }// else numeric output
 
@@ -2546,80 +2864,57 @@ QString ProtocolField::getTextPrintString(bool isStructureMember) const
 
 /*!
  * Get the string used for text reading this field.
- * \param isStructureMember should be true to indicate this field is accessed as a member structure
  * \return the string used to read this field as text, which may be empty
  */
-QString ProtocolField::getTextReadString(bool isStructureMember) const
+std::string ProtocolField::getTextReadString(void) const
 {
-    QString output;
+    std::string output;
 
     // No print if nothing is in memory or if not encoded
     if(inMemoryType.isNull || encodedType.isNull)
         return output;
 
-    QString access;
-
-    if(isStructureMember)
-        access = "_pg_user->" + name;
-    else
-        access = name;
-
     if(inMemoryType.isString)
     {
-        output += TAB_IN + "strncpy(" + access + ", extractText(_pg_prename + \":" + name + "\", _pg_source, &_pg_fieldcount).toLatin1().constData(), " + array + ");\n";
+        // Notice the use of the "pg" copy function, which is just like strncpy but without the security vulnerabilities
+        output += TAB_IN + "pgstrncpy(" + getDecodeFieldAccess(true) + ", extractText(_pg_prename + \":" + name + "\", _pg_source, &_pg_fieldcount).c_str(), " + array + ");\n";
     }
     else
     {
-        QString spacing = TAB_IN;
-        bool closeforloop = false;
-        bool closeforloop2 = false;
+        std::string spacing = TAB_IN;
 
-        if(isArray())
-        {
-            closeforloop = true;
-
-            if(!variableArray.isEmpty() && isStructureMember)
-                output += spacing + "for(_pg_i = 0; (_pg_i < " + array + ") && (_pg_i < (unsigned)_pg_user->" + variableArray + "); _pg_i++)\n";
-            else
-                output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
-
-            output += spacing + "{\n";
-            spacing += TAB_IN;
-            access = access + "[_pg_i]";
-        }
+        output += getDecodeArrayIterationCode(spacing, true);
 
         if(is2dArray())
         {
-            closeforloop2 = true;
-
-            if(!variable2dArray.isEmpty() && isStructureMember)
-            {
-                output += spacing + "for(_pg_j = 0; (_pg_j < " + array2d + ") && (_pg_j < (unsigned)_pg_user->" + variable2dArray + "); _pg_j++)\n";
-                output += spacing + "{\n";
-                spacing += TAB_IN;
-            }
-            else
-            {
-                output += spacing + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
-                output += spacing + "{\n";
-                spacing += TAB_IN;
-            }
-
-            access = access + "[_pg_j]";
+            spacing += TAB_IN;
+            output += spacing + "{\n";
+            spacing += TAB_IN;
+        }
+        else if(isArray())
+        {
+            output += spacing + "{\n";
+            spacing += TAB_IN;
         }
 
         if(inMemoryType.isStruct)
         {
-            output += spacing + "_pg_fieldcount += textRead" + typeName + "(_pg_prename + \":" + name + "\"";
+            if(support.language == ProtocolSupport::c_language)
+                output += spacing + "_pg_fieldcount += textRead" + typeName + "(_pg_prename + \":" + name + "\"";
+            else
+                output += spacing + "_pg_fieldcount += " + getDecodeFieldAccess(true) + ".textRead(_pg_prename + \":" + name + "\"";
 
             if(isArray())
-                output += " + \"[\" + QString::number(_pg_i) + \"]\"";
+                output += " + \"[\" + std::to_string(_pg_i) + \"]\"";
 
             if(is2dArray())
-                output += " + \"[\" + QString::number(_pg_j) + \"]\"";
+                output += " + \"[\" + std::to_string(_pg_j) + \"]\"";
 
-            // Structure read, we need to pass the address of the structure, not the object
-            output += ", _pg_source, &" + access + ");\n";
+            // Structure read, we need to pass the address of the structure, not the object        
+            if(support.language == ProtocolSupport::c_language)
+                output += ", _pg_source, " + getDecodeFieldAccess(true) + ");\n";
+            else
+                output += ", _pg_source);\n";
         }
         else
         {
@@ -2628,44 +2923,47 @@ QString ProtocolField::getTextReadString(bool isStructureMember) const
 
             // The array indices are part of the key text
             if(isArray())
-                output += " + \"[\" + QString::number(_pg_i) + \"]\"";
+            {
+                output += " + \"[\" + std::to_string(_pg_i) + \"]\"";
 
-            if(is2dArray())
-                output += " + \"[\" + QString::number(_pg_j) + \"]\"";
+                if(is2dArray())
+                    output += " + \"[\" + std::to_string(_pg_j) + \"]\"";
+            }
 
             output += ", _pg_source, &_pg_fieldcount);\n";
 
             // Check the text and get a result if it is not empty
-            output += spacing + "if(!_pg_text.isEmpty())\n";
+            output += spacing + "if(!_pg_text.empty())\n";
 
-            if(inMemoryType.isFloat || !readScalerString.isEmpty())
-                output += spacing + TAB_IN + access + " = (" + typeName + ")(_pg_text.toDouble()" + readScalerString + ");\n";
+            if(!readScalerString.empty())
+                output += spacing + TAB_IN + getDecodeFieldAccess(true) + " = (" + typeName + ")(std::stod(_pg_text)" + readScalerString + ");\n";
+            else if(inMemoryType.isFloat && (inMemoryType.bits > 32))
+                output += spacing + TAB_IN + getDecodeFieldAccess(true) + " = std::stod(_pg_text);\n";
+            else if(inMemoryType.isFloat)
+                output += spacing + TAB_IN + getDecodeFieldAccess(true) + " = std::stof(_pg_text);\n";
             else if(inMemoryType.isSigned)
             {
                 if(inMemoryType.bits > 32)
-                    output += spacing + TAB_IN + access + " = (" + typeName + ")(_pg_text.toLongLong());\n";
+                    output += spacing + TAB_IN + getDecodeFieldAccess(true) + " = (" + typeName + ")(std::stoll(_pg_text));\n";
+                if(inMemoryType.bits > 16)
+                    output += spacing + TAB_IN + getDecodeFieldAccess(true) + " = (" + typeName + ")(std::stol(_pg_text));\n";
                 else
-                    output += spacing + TAB_IN + access + " = (" + typeName + ")(_pg_text.toInt());\n";
+                    output += spacing + TAB_IN + getDecodeFieldAccess(true) + " = (" + typeName + ")(std::stoi(_pg_text));\n";
             }
             else
             {
                 if(inMemoryType.bits > 32)
-                    output += spacing + TAB_IN + access + " = (" + typeName + ")(_pg_text.toULongLong());\n";
+                    output += spacing + TAB_IN + getDecodeFieldAccess(true) + " = (" + typeName + ")(std::stoull(_pg_text));\n";
                 else
-                    output += spacing + TAB_IN + access + " = (" + typeName + ")(_pg_text.toUInt());\n";
+                    output += spacing + TAB_IN + getDecodeFieldAccess(true) + " = (" + typeName + ")(std::stoul(_pg_text));\n";
             }
 
         }// else not a struct
 
-        if(closeforloop2)
+        // Close the block under the for loop(s)
+        if(isArray())
         {
-            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
-            output += spacing + "}\n";
-        }
-
-        if(closeforloop)
-        {
-            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
+            spacing = spacing.substr(0, spacing.length() - TAB_IN.length());
             output += spacing + "}\n";
         }
 
@@ -2678,12 +2976,11 @@ QString ProtocolField::getTextReadString(bool isStructureMember) const
 
 /*!
  * Get the string used for storing this field in a map.
- * \param isStructureMember should be true to indicate this field is accessed as a member structure
  * \return the string used to read this field as text, which may be empty
  */
-QString ProtocolField::getMapEncodeString(bool isStructureMember) const
+std::string ProtocolField::getMapEncodeString(void) const
 {  
-    QString output;
+    std::string output;
 
     // Cannot encode to a null memory type
     if(inMemoryType.isNull)
@@ -2696,70 +2993,42 @@ QString ProtocolField::getMapEncodeString(bool isStructureMember) const
     if(inMemoryType.isNull || encodedType.isNull)
         return output;
 
-    QString access;
-
-    if(isStructureMember)
-        access = "_pg_user->" + name;
-    else
-        access = name;
-
-    if(!comment.isEmpty())
+    if(!comment.empty())
         output += TAB_IN + "// " + comment + "\n";
 
     if(inMemoryType.isString)
     {
-        output += TAB_IN + "_pg_map[_pg_prename + \":" + name + "\"] = QString(" + access + ");\n";
+        output += TAB_IN + "_pg_map[_pg_prename + \":" + name + "\"] = QString(" + getEncodeFieldAccess(true) + ");\n";
     }
     else
     {
-        QString spacing = TAB_IN;
-        bool closeforloop = false;
-        bool closeforloop2 = false;
+        std::string spacing = TAB_IN;
 
+        output += getEncodeArrayIterationCode(spacing, true);
         if(isArray())
         {
-            closeforloop = true;
-
-            if(!variableArray.isEmpty() && isStructureMember)
-                output += spacing + "for(_pg_i = 0; (_pg_i < " + array + ") && (_pg_i < (unsigned)_pg_user->" + variableArray + "); _pg_i++)\n";
-            else
-                output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
-
-            output += spacing + "{\n";
             spacing += TAB_IN;
-            access = access + "[_pg_i]";
-        }
-
-        if(is2dArray())
-        {
-            closeforloop2 = true;
-
-            if(!variable2dArray.isEmpty() && isStructureMember)
-            {
-                output += spacing + "for(_pg_j = 0; (_pg_j < " + array2d + ") && (_pg_j < (unsigned)_pg_user->" + variable2dArray + "); _pg_j++)\n";
-                output += spacing + "{\n";
+            if(is2dArray())
                 spacing += TAB_IN;
-            }
-            else
-            {
-                output += spacing + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
-                output += spacing + "{\n";
-                spacing += TAB_IN;
-            }
-
-            access = access + "[_pg_j]";
         }
 
         if(inMemoryType.isStruct)
         {
-            output += spacing + "mapEncode" + typeName + "(_pg_prename + \":" + name + "\"";
+            if(support.language == ProtocolSupport::c_language)
+                output += spacing + "mapEncode" + typeName + "(_pg_prename + \":" + name + "\"";
+            else
+                output += spacing + getEncodeFieldAccess(true) + ".mapEncode(_pg_prename + \":" + name + "\"";
 
             if(isArray())
                 output += " + \"[\" + QString::number(_pg_i) + \"]\"";
             if(is2dArray())
                 output += " + \"[\" + QString::number(_pg_j) + \"]\"";
 
-            output += ", _pg_map, &" + access + ");\n";
+            if(support.language == ProtocolSupport::c_language)
+                output += ", _pg_map, " + getEncodeFieldAccess(true) + ");\n";
+            else
+                output += ", _pg_map);\n";
+
         }// data type is a struct
         else
         {
@@ -2773,42 +3042,31 @@ QString ProtocolField::getMapEncodeString(bool isStructureMember) const
             output += "] = ";
 
             // Numeric values are automatically converted to correct QVariant types
-            if(inMemoryType.isFloat || !printScalerString.isEmpty())
-                output += access + printScalerString;
+            if(inMemoryType.isFloat || !printScalerString.empty())
+                output += getEncodeFieldAccess(true) + printScalerString;
             else
-                output += access;
+                output += getEncodeFieldAccess(true);
 
             output += ";\n";
 
         }// else not a struct
 
-        if(closeforloop2)
-        {
-            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
-            output += spacing + "}\n";
-        }
-
-        if(closeforloop)
-        {
-            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
-            output += spacing + "}\n";
-        }
     }// else numeric output
 
     return output;
+
 }// ProtocolField::getMapEncodeString
 
 
 /*!
  * Get the string used for extracting this field from a map.
- * \param isStructureMember should be true to indicate this field is accessed as a member structure
  * \return the string used to read this field as text, which may be empty
  */
-QString ProtocolField::getMapDecodeString(bool isStructureMember) const
+std::string ProtocolField::getMapDecodeString(void) const
 {
-    QString key;
-    QString output;
-    QString decode;
+    std::string key;
+    std::string output;
+    std::string decode;
 
     // Cannot decode to a null memory type
     if(inMemoryType.isNull)
@@ -2818,75 +3076,52 @@ QString ProtocolField::getMapDecodeString(bool isStructureMember) const
     if((mapOptions & MAP_DECODE) == 0)
         return output;
 
-    QString access;
-
-    if(isStructureMember)
-        access = "_pg_user->" + name;
-    else
-        access = name;
-
-    if(!comment.isEmpty())
+    if(!comment.empty())
         output += TAB_IN + "// " + comment + "\n";
 
     if(inMemoryType.isString)
     {
         key = "_pg_prename + \":" + name + "\"";
 
-        output += TAB_IN + "key = " + key + ";\n\n";
-
+        output += TAB_IN + "key = " + key + ";\n";
+        output += "\n";
         output += TAB_IN + "if (_pg_map.contains(key))\n";
-        output += TAB_IN + TAB_IN + "strncpy(" + access + ", _pg_map[key].toString().toLatin1().constData(), " + array + ");\n";
+        output += TAB_IN + TAB_IN + "qstrncpy(" + getDecodeFieldAccess(true) + ", _pg_map[key].toString().toLatin1().constData(), " + array + ");\n";
     }
     else
     {
-        QString spacing = TAB_IN;
-        bool closeforloop = false;
-        bool closeforloop2 = false;
+        std::string spacing = TAB_IN;
 
-        if(isArray())
-        {
-            closeforloop = true;
-
-            if(!variableArray.isEmpty() && isStructureMember)
-                output += spacing + "for(_pg_i = 0; (_pg_i < " + array + ") && (_pg_i < (unsigned)_pg_user->" + variableArray + "); _pg_i++)\n";
-            else
-                output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
-
-            output += spacing + "{\n";
-            spacing += TAB_IN;
-            access = access + "[_pg_i]";
-        }
+        output += getEncodeArrayIterationCode(spacing, true);
 
         if(is2dArray())
         {
-            closeforloop2 = true;
-
-            if(!variable2dArray.isEmpty() && isStructureMember)
-            {
-                output += spacing + "for(_pg_j = 0; (_pg_j < " + array2d + ") && (_pg_j < (unsigned)_pg_user->" + variable2dArray + "); _pg_j++)\n";
-                output += spacing + "{\n";
-                spacing += TAB_IN;
-            }
-            else
-            {
-                output += spacing + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
-                output += spacing + "{\n";
-                spacing += TAB_IN;
-            }
-
-            access = access + "[_pg_j]";
+            spacing += TAB_IN;
+            output += spacing + "{\n";
+            spacing += TAB_IN;
+        }
+        else if(isArray())
+        {
+            output += spacing + "{\n";
+            spacing += TAB_IN;
         }
 
         if(inMemoryType.isStruct)
         {
-            output += spacing + "mapDecode" + typeName + "(_pg_prename + \":" + name + "\"";
+            if(support.language == ProtocolSupport::c_language)
+                output += spacing + "mapDecode" + typeName + "(_pg_prename + \":" + name + "\"";
+            else
+                output += spacing + getDecodeFieldAccess(true) + ".mapDecode(_pg_prename + \":" + name + "\"";
 
             if(isArray())
                 output += " + \"[\" + QString::number(_pg_i) + \"]\"";
             if(is2dArray())
                 output += " + \"[\" + QString::number(_pg_j) + \"]\"";
 
-            output += ", _pg_map, &" + access + ");\n";
+            if(support.language == ProtocolSupport::c_language)
+                output += ", _pg_map, " + getDecodeFieldAccess(true) + ");\n";
+            else
+                output += ", _pg_map);\n";
 
         }// data type is a struct
         else
@@ -2902,7 +3137,7 @@ QString ProtocolField::getMapDecodeString(bool isStructureMember) const
 
             decode = "_pg_map[key]";
 
-            if(inMemoryType.isFloat || !printScalerString.isEmpty())
+            if(inMemoryType.isFloat || !printScalerString.empty())
                 decode += ".toDouble";
             else if (inMemoryType.isSigned)
             {
@@ -2929,23 +3164,18 @@ QString ProtocolField::getMapDecodeString(bool isStructureMember) const
             output += spacing + "{\n";
             output += spacing + TAB_IN + decode + "(&ok);\n";
             output += spacing + TAB_IN + "if(ok)\n";
-            output += spacing + TAB_IN + TAB_IN + access + " = (" + typeName + ")" + decode + "()";
-            if(inMemoryType.isFloat && !printScalerString.isEmpty())
+            output += spacing + TAB_IN + TAB_IN + getDecodeFieldAccess(true) + " = (" + typeName + ")" + decode + "()";
+            if(inMemoryType.isFloat && !printScalerString.empty())
                 output += readScalerString;
             output += ";\n";
             output += spacing + "}\n";
 
         }// else not a struct
 
-        if(closeforloop2)
+        // Close the block under the for loop(s)
+        if(isArray())
         {
-            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
-            output += spacing + "}\n";
-        }
-
-        if(closeforloop)
-        {
-            spacing.remove(spacing.lastIndexOf(TAB_IN), TAB_IN.count());
+            spacing = spacing.substr(0, spacing.length() - TAB_IN.length());
             output += spacing + "}\n";
         }
 
@@ -2961,7 +3191,7 @@ QString ProtocolField::getMapDecodeString(bool isStructureMember) const
  * \param isStructureMember should be true if this field is accessed through a "user" structure pointer
  * \return the string to add to the source file, including line feed
  */
-QString ProtocolField::getSetToDefaultsString(bool isStructureMember) const
+std::string ProtocolField::getSetToDefaultsString(bool isStructureMember) const
 {
     return getSetToValueString(isStructureMember, defaultString);
 }
@@ -2972,69 +3202,122 @@ QString ProtocolField::getSetToDefaultsString(bool isStructureMember) const
  * \param isStructureMember should be true if this field is accessed through a "user" structure pointer
  * \return the string to add to the source file, including line feed
  */
-QString ProtocolField::getSetInitialValueString(bool isStructureMember) const
+std::string ProtocolField::getSetInitialValueString(bool isStructureMember) const
 {
-    QString output;
-
-    if(!hasInit())
-        return output;
+    std::string output;
 
     if(inMemoryType.isNull)
         return output;
 
     if(inMemoryType.isStruct)
     {
-        QString access;
-
-        if(!comment.isEmpty())
-            output += TAB_IN + "// " + comment + "\n";
-
-        if(isArray())
+        // In C++ the constructor is the initializer
+        if(support.language == ProtocolSupport::c_language)
         {
-            output += TAB_IN + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
+            if(!hasInit())
+                return output;
 
-            if(is2dArray())
+            std::string spacing = TAB_IN;
+
+            if(!comment.empty())
+                output += spacing + "// " + comment + "\n";
+
+            getEncodeArrayIterationCode(spacing, isStructureMember);
+
+            if(isArray())
             {
-                output += TAB_IN + TAB_IN + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
+                spacing += TAB_IN;
+                if(is2dArray())
+                    spacing += TAB_IN;
+            }
 
-                if(isStructureMember)
-                    access = "&_pg_user->" + name + "[_pg_i][_pg_j]";
-                else
-                    access = "&" + name + "[_pg_i][_pg_j]";
+            output += spacing + "init" + typeName + "(" + getDecodeFieldAccess(isStructureMember) + ");\n";
 
-                output += TAB_IN + TAB_IN + TAB_IN + "init" + typeName + "(" + access + ");\n";
-
-            }// if 2D array of structures
-            else
-            {
-                if(isStructureMember)
-                    access = "&_pg_user->" + name + "[_pg_i]";
-                else
-                    access = "&" + name + "[_pg_i]";
-
-                output += TAB_IN + TAB_IN + "init" + typeName + "(" + access + ");\n";
-
-            }// else if only 1-D array
-
-        }// if array of structures
-        else
-        {
-            if(isStructureMember)
-                access = "&_pg_user->" + name;
-            else
-                access = name;  // in this case, name is already pointer, so we don't need "&"
-
-            output += TAB_IN + "init" + typeName + "(" + access + ");\n";
-
-        }// else if simple structure, no array
+        }// If C language
 
     }// if struct
-    else if(!initialValueString.isEmpty())
+    else if(!isNotInMemory())
     {
-        if(!comment.isEmpty())
-            output += TAB_IN + "// " + comment + "\n";
+        if(support.language == ProtocolSupport::c_language)
+        {            
+            if(!initialValueString.empty())
+            {
+                if(!comment.empty())
+                    output += TAB_IN + "// " + comment + "\n";
 
-        output += getSetToValueString(isStructureMember, initialValueString);
+                // This has the array handling built in
+                output += getSetToValueString(isStructureMember, initialValueString);
+            }
+        }
+        else
+        {
+            // Try the user's value first
+            std::string initial = initialValueString;
+
+            // If there isn't one, use the default value
+            if(initial.empty())
+                initial = defaultString;
+
+            // If there isn't one, use the constant value
+            if(initial.empty())
+                initial = constantString;
+
+            // If there isn't one, use the verify min value
+            if(initial.empty())
+                initial = verifyMinString;
+
+            // In C++ we explicitly initialize all members.
+            if(initial.empty())
+            {
+                if(!inMemoryType.isString)
+                {
+                    if(inMemoryType.isEnum)
+                    {
+                        const EnumCreator* creator = parser->lookUpEnumeration(inMemoryType.enumName);
+                        if(creator == nullptr)
+                            initial = "(" + inMemoryType.enumName + ")0";
+                        else
+                            initial = creator->getFirstEnumerationName();
+                    }
+                    else
+                    {
+                        // Zero seems like the best choice, but we can do a
+                        // little better, if for example we have a minimum
+                        // encoded value we should initialize to
+                        // respect those values
+                        if(limitMaxValue < 0)
+                            initial = limitMaxString;
+                        else if(limitMinValue > 0)
+                            initial = limitMinString;
+                        else
+                            initial = "0";
+
+                    }// else if we are not an enumeration
+
+                }// If we are not a string
+
+            }// If we have no user provided initial value
+
+            initial = inMemoryType.applyTypeToConstant(initial);
+
+            // C++ initializer list
+            if(inMemoryType.isString)
+            {
+                // initial is a string literal, so include the quotes. Except for
+                // a special case. If initial ends in "()" then we assume its a
+                // function or macro call
+                if(!endsWith(trimm(initial), "()"))
+                    initial = "\"" + initial + "\"";
+
+                output += TAB_IN + name + "(" + initial + "),\n";
+            }
+            else if(is2dArray())
+                output += TAB_IN + name + "{{" + initial + "}},\n";
+            else if(isArray())
+                output += TAB_IN + name + "{" + initial + "},\n";
+            else
+                output += TAB_IN + name + "(" + initial + "),\n";
+        }
     }
 
     return output;
@@ -3043,32 +3326,32 @@ QString ProtocolField::getSetInitialValueString(bool isStructureMember) const
 
 
 /*!
- * Return the string that sets this encodable to specific value in code, this cannot be used with a struct
- * \param isStructureMember should be true if this field is accessed through a "user" structure pointer
+ * Return the string that sets this encodable to specific value in code. Note
+ * that for arrays this sets all members, even if the array is variable length.
+ * \param isStructureMember should be true if this field is accessed through a
+ *        "user" structure pointer.
  * \param value is the string of the specific value.
- * \return the string to add to the source file, including line feed
+ * \return the string to add to the source file, including line feed.
  */
-QString ProtocolField::getSetToValueString(bool isStructureMember, QString value) const
+std::string ProtocolField::getSetToValueString(bool isStructureMember, std::string value) const
 {
-    QString output;
-    QString access;
+    std::string output;
 
     if(inMemoryType.isStruct)
         return output;
 
-    if(value.isEmpty())
-        return QString();
+    if(value.empty())
+        return output;
+
+    std::string access = getDecodeFieldAccess(isStructureMember);
 
     // Write out the defaults code
     if(inMemoryType.isString)
     {
-        if(isStructureMember)
-            access = "_pg_user->";
-
-        if(value.isEmpty() || value.compare("null", Qt::CaseInsensitive) == 0)
-            output += TAB_IN + access + name + "[0] = 0;\n";
+        if(value.empty() || (toLower(value) == "null"))
+            output += TAB_IN + access + "[0] = 0;\n";
         else
-            output += TAB_IN + "strncpy((char*)" + access + name + ", \"" + value + "\", " + array + ");\n";
+            output += TAB_IN + "pgstrncpy((char*)" + access + ", \"" + value + "\", " + array + ");\n";
     }
     else
     {
@@ -3078,7 +3361,7 @@ QString ProtocolField::getSetToValueString(bool isStructureMember, QString value
             // If the value contains a decimal then we assume it is a floating
             // point constant, if it does not contain ".0f" then we assume it
             // is a double precision constant
-            if(value.contains('.') && !value.endsWith('f'))
+            if((value.find('.') != std::string::npos) && (value.back() != 'f'))
             {
                 // Rather than presume to change the default constant we simply put a cast in front of it
                 value = "(float)" + value;
@@ -3087,30 +3370,21 @@ QString ProtocolField::getSetToValueString(bool isStructureMember, QString value
 
         if(isArray())
         {
-            if(isStructureMember)
-                access = "_pg_user->";
-
             if(is2dArray())
             {
                 output += TAB_IN + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
                 output += TAB_IN + TAB_IN + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
-                output += TAB_IN + TAB_IN + TAB_IN + access + name + "[_pg_i][_pg_j] = " + value + ";\n";
+                output += TAB_IN + TAB_IN + TAB_IN + access + " = " + value + ";\n";
             }
             else
             {
                 output += TAB_IN + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
-                output += TAB_IN + TAB_IN + access + name + "[_pg_i] = " + value + ";\n";
+                output += TAB_IN + TAB_IN + access + " = " + value + ";\n";
             }
         }
         else
         {
-            if(isStructureMember)
-                access = "_pg_user->";
-            else
-                access = "*";
-
-            // Direct pointer access
-            output += TAB_IN + access + name + " = " + value + ";\n";
+            output += TAB_IN + access + " = " + value + ";\n";
         }
 
     }// else if not a struct
@@ -3121,26 +3395,26 @@ QString ProtocolField::getSetToValueString(bool isStructureMember, QString value
 
 
 //! Return the strings that #define initial and variable values
-QString ProtocolField::getInitialAndVerifyDefines(bool includeComment) const
+std::string ProtocolField::getInitialAndVerifyDefines(bool includeComment) const
 {
-    Q_UNUSED(includeComment);
+    (void)includeComment;
 
-    QString output;
+    std::string output;
 
     if(inMemoryType.isNull || inMemoryType.isStruct)
         return output;
 
-    QString start = getHierarchicalName();
+    // No colons in preprocessor definitions
+    std::string start = getHierarchicalName();
+    replaceinplace(start, ":", "_");
 
-    start.replace(":", "_");
-
-    if(!initialValueString.isEmpty())
+    if(!initialValueString.empty())
         output += "#define " + start + "_InitValue " + initialValueString + "\n";
 
-    if(!verifyMinString.isEmpty())
+    if(!verifyMinString.empty())
         output += "#define " + start + "_VerifyMin " + verifyMinString + "\n";
 
-    if(!verifyMaxString.isEmpty())
+    if(!verifyMaxString.empty())
         output += "#define " + start + "_VerifyMax " + verifyMaxString + "\n";
 
     return output;
@@ -3154,34 +3428,6 @@ bool ProtocolField::usesBitfields(void) const
     return (encodedType.isBitfield && !isNotEncoded());
 }
 
-
-//! True if this field has a smaller encoded size than in memory size, which requires a size check
-bool ProtocolField::requiresSizeCheck(void) const
-{
-    // No size check needed if nothing is in memory or if not encoded
-    if(inMemoryType.isNull || encodedType.isNull)
-        return false;
-
-    // If we are encoding a constant, then it's up to the user to make sure it fits
-    if(!constantString.isEmpty())
-        return false;
-
-    // If encoding a boolean, it will fit in as little as one bit
-    if(inMemoryType.isBool)
-        return false;
-
-    // Different in-memory versus encoded bit size, requires size check
-    if(inMemoryType.bits > encodedType.bits)
-        return true;
-
-    // If the in memory type is a float, and the encoded type is not then it
-    // needs a size check even if the in memory bits are less than the encoded bits
-    if(inMemoryType.isFloat && !encodedType.isFloat)
-        return true;
-
-    return false;
-
-}
 
 //! True if this bitfield crosses a byte boundary
 bool ProtocolField::bitfieldCrossesByteBoundary(void) const
@@ -3218,10 +3464,6 @@ bool ProtocolField::usesEncodeTempBitfield(void) const
         if(getConstantString() == "0")
             return false;
 
-        // Different in-memory versus encoded bit size, requires size check
-        if(requiresSizeCheck())
-            return true;
-
         return bitfieldCrossesByteBoundary();
     }
 
@@ -3242,10 +3484,6 @@ bool ProtocolField::usesEncodeTempLongBitfield(void) const
         // If we are encoding a constant zero we don't need temporary variables, no matter how big the field is
         if(getConstantString() == "0")
             return false;
-
-        // Different in-memory versus encoded bit size, requires size check
-        if(requiresSizeCheck())
-            return true;
 
         return bitfieldCrossesByteBoundary();
     }
@@ -3318,6 +3556,144 @@ bool ProtocolField::usesDecodeTempLongBitfield(void) const
 
 
 /*!
+ * Create a comment, with no leading white space, but including a line feed,
+ * that documents the encoded range of this field. The encoded range will
+ * include any modification caused by "limitonencode" rules.
+ * \param limitonencode should be true to use the verify min and max strings as part of the range comment
+ * \return The range comment
+ */
+std::string ProtocolField::getRangeComment(bool limitonencode) const
+{
+    std::string minstring, maxstring;
+
+    if((limitonencode == false) || verifyMaxString.empty() || (hasVerifyMaxValue && (verifyMaxValue >= limitMaxValue)))
+        maxstring = limitMaxStringForComment;
+    else
+        maxstring = verifyMaxString;
+
+    if((limitonencode == false) || verifyMinString.empty() || (hasVerifyMinValue && (verifyMinValue <= limitMinValue)))
+        minstring = limitMinStringForComment;
+    else
+        minstring = verifyMinString;
+
+    return "// Range of " + name + " is " + minstring + " to " + maxstring +  ".\n";
+
+}// ProtocolField::getRangeComment
+
+
+/*!
+ * Given an argument determine if that argument should be passed to the limiting
+ * macro and return the argument including the limiting macro as needed.
+ * \param argument is the symbol that may need to be limited
+ * \return argument embedded within the limiting macro as needed
+ */
+std::string ProtocolField::getLimitedArgument(std::string argument) const
+{
+    // Boolean is handled specially, because it is only ever 1 bit (true or false), but the in-memory size is more than 1 bit
+    if(inMemoryType.isBool)
+        return argument;
+
+    // If scaling is active the scaling functions will apply encoding
+    // limits. The same thing will happen with the conversion to smaller
+    // floating point types
+    if(isFloatScaling() || isIntegerScaling() || (encodedType.isFloat && (encodedType.bits < 32)))
+    {
+        // However the user may want tighter limits
+        if(support.limitonencode && (!verifyMinString.empty() || !verifyMaxString.empty()))
+        {
+            bool skipmin = verifyMinString.empty();
+            bool skipmax = verifyMaxString.empty();
+
+            if(!skipmax && hasVerifyMaxValue && (verifyMaxValue >= limitMaxValue))
+                skipmax = true;
+
+            if(!skipmin && hasVerifyMinValue && (verifyMinValue <= limitMinValue))
+                skipmin = true;
+
+            if(skipmin && skipmax)
+                return argument;
+
+            if(skipmin)
+                argument = "limitMax(" + argument + ", " + verifyMaxString + ")";
+            else if(skipmax)
+                argument = "limitMin(" + argument + ", " + verifyMinString + ")";
+            else
+                argument = "limitBoth(" + argument + ", " + verifyMinString + ", " + verifyMaxString + ")";
+
+        }// if user asked for specific encode limiting
+
+    }// if scaling is going on
+    else
+    {
+        std::string minstring = limitMinString;
+        std::string maxstring = limitMaxString;
+        double minvalue = limitMinValue;
+        double maxvalue = limitMaxValue;
+        bool skipmin = true;
+        bool skipmax = true;
+
+        // In this case we don't have the scaling functions, so we may need to apply a limit, even if the user didn't ask for it
+        if(!hasVerifyMaxValue && !verifyMaxString.empty() && support.limitonencode)
+        {
+            // In this case we cannot vet the user's verify string, we just have to use it
+            maxstring = verifyMaxString;
+            skipmax = false;
+
+        }// if we cannot evaluate the verify value
+        else
+        {
+            if(hasVerifyMaxValue && support.limitonencode && (verifyMaxValue < limitMaxValue))
+            {
+                maxvalue = verifyMaxValue;
+                maxstring = verifyMaxString;
+            }
+
+            // Now check if this max value is less than the in-Memory maximum. If it is then we must apply the max limit. We allow one lsb of fiddle.
+            if(nextafter(maxvalue, std::numeric_limits<double>::max()) < inMemoryType.getMaximumFloatValue())
+                skipmax = false;
+
+        }// else if we can evaluate the verify value
+
+        // In this case we don't have the scaling functions, so we may need to apply a limit, even if the user didn't ask for it
+        if(!hasVerifyMinValue && !verifyMinString.empty() && support.limitonencode)
+        {
+            // In this case we cannot vet the user's verify string, we just have to use it
+            minstring = verifyMinString;
+            skipmin = false;
+
+        }// if we cannot evaluate the verify value
+        else
+        {
+            if(hasVerifyMinValue && support.limitonencode && (verifyMinValue > limitMinValue))
+            {
+                minvalue = verifyMinValue;
+                minstring = verifyMinString;
+            }
+
+            // Now check if this min value is more than the in-Memory minimum. If it is then we must apply the min limit. We allow one lsb of fiddle.
+            if(nextafter(minvalue, -std::numeric_limits<double>::max()) > inMemoryType.getMinimumFloatValue())
+                skipmin = false;
+
+        }// else if we can evaluate the verify value
+
+        if(skipmin && skipmax)
+            return argument;
+
+        if(skipmin)
+            argument = "limitMax(" + argument + ", " + maxstring + ")";
+        else if(skipmax)
+            argument = "limitMin(" + argument + ", " + minstring + ")";
+        else
+            argument = "limitBoth(" + argument + ", " + minstring + ", " + maxstring + ")";
+
+    }// else if not scaling
+
+    return argument;
+
+}// ProtocolField::getLimitedArgument
+
+
+/*!
  * Get the next lines(s) of source coded needed to encode this bitfield field
  * \param bitcount points to the running count of bits in this string of
  *        bitfields, and will be updated by this fields encoded bit count.
@@ -3326,25 +3702,24 @@ bool ProtocolField::usesDecodeTempLongBitfield(void) const
  *        to the inMemoryType
  * \return The string to add to the source file that encodes this field.
  */
-QString ProtocolField::getEncodeStringForBitfield(int* bitcount, bool isStructureMember) const
+std::string ProtocolField::getEncodeStringForBitfield(int* bitcount, bool isStructureMember) const
 {
-    QString argument;
-    QString output;
-    QString constantstring = getConstantString();
+    std::string argument;
+    std::string output;
+    std::string constantstring = getConstantString();
 
     if(encodedType.isNull)
         return output;
 
-    if(!comment.isEmpty())
+    if(!comment.empty())
         output += TAB_IN + "// " + comment + "\n";
 
-    if(constantstring.isEmpty())
-    {
-        if(isStructureMember)
-            argument = "_pg_user->" + name;
-        else
-            argument = name;
-    }
+    // Commenting indicating the range of the field
+    if(!inMemoryType.isNull && !inMemoryType.isBool && constantstring.empty() && (encodedType.bits > 1) && !inMemoryType.isEnum)
+        output += TAB_IN + getRangeComment(support.limitonencode);
+
+    if(constantstring.empty())
+        argument = getLimitedArgument(getEncodeFieldAccess(isStructureMember));
     else
         argument = constantstring;
 
@@ -3354,9 +3729,6 @@ QString ProtocolField::getEncodeStringForBitfield(int* bitcount, bool isStructur
     }
     else if(isFloatScaling())
     {
-        // Additional commenting to describe the scaling
-        output += TAB_IN + "// Range of " + name + " is " + getNumberString(encodedMin) + " to " + getNumberString(encodedMax) +  ".\n";
-
         if(encodedType.bits > 32)
         {
             if(support.longbitfield)
@@ -3372,7 +3744,6 @@ QString ProtocolField::getEncodeStringForBitfield(int* bitcount, bool isStructur
                    argument = "float64ScaledToBitfield((double)" + argument;
                 else
                    argument = "float32ScaledToBitfield((float)" + argument;
-
             }
         }
         else
@@ -3380,50 +3751,23 @@ QString ProtocolField::getEncodeStringForBitfield(int* bitcount, bool isStructur
 
         argument += ", " + getNumberString(encodedMin, encodedType.bits);
         argument += ", " + getNumberString(scaler, encodedType.bits);
+        argument += ", " + std::to_string(encodedType.bits);
         argument += ")";
-
     }
     else if(isIntegerScaling())
     {
-        // Additional commenting to describe the scaling
-        output += TAB_IN + "// Range of " + name + " is " + getNumberString(encodedMin) + " to " + getNumberString(encodedMax) +  ".\n";
-
-        if((encodedMin != 0) && !encodedType.isSigned)
-            argument = "(" + argument + " - " + QString::number(encodedMin, 'f', 0) + ")";
-
-        if(scaler != 1.0)
-            argument += "*" + QString::number(scaler, 'f', 0);
-
-        // Now put the cast in
-        if((encodedType.bits > 32) && (support.longbitfield))
-            argument = "(uint64_t)" + argument;
+        if((encodedType.bits > 32) && support.longbitfield)
+            argument = inMemoryType.toSigString() + "ScaledToLongBitfield(" + argument;
         else
-            argument = "(unsigned int)" + argument;
+            argument = inMemoryType.toSigString() + "ScaledToBitfield(" + argument;
+
+        argument += ", " + std::to_string((int)round(encodedMin));
+        argument += ", " + std::to_string((int)round(scaler));
+        argument += ", " + std::to_string(encodedType.bits);
+        argument += ")";
     }
 
-    // The size check inserts a line, replacing the original argument with a temporary field
-    if(requiresSizeCheck())
-    {
-        QString maxvalue = QString().setNum(ProtocolBitfield::maxvalueoffield(encodedType.bits));
-        QString tempname;
-
-        if((encodedType.bits > 32) && (support.longbitfield))
-        {
-            maxvalue += "ULL";
-            tempname = "_pg_templongbitfield";
-        }
-        else
-        {
-            tempname = "_pg_tempbitfield";
-        }
-
-        // This block makes sure the size does not overflow the bitfield
-        output += TAB_IN + tempname + " = " + argument + ";\n";
-        output += TAB_IN + "if(" + tempname + " > " + maxvalue + ")\n";
-        output += TAB_IN + TAB_IN + tempname + " = " + maxvalue + ";\n\n";
-        argument = tempname;
-    }
-    else if(usesEncodeTempBitfield())
+    if(usesEncodeTempBitfield())
     {
         output += TAB_IN + "_pg_tempbitfield = (unsigned int)" + argument + ";\n";
         argument = "_pg_tempbitfield";
@@ -3454,9 +3798,9 @@ QString ProtocolField::getEncodeStringForBitfield(int* bitcount, bool isStructur
             output += TAB_IN + "// Encode the entire group of bits in one shot\n";
 
             if(support.bigendian)
-                output += TAB_IN + "bytesToBeBytes(_pg_bitfieldbytes, _pg_data, &_pg_byteindex, " + QString::number(num) + ");\n";
+                output += TAB_IN + "bytesToBeBytes(_pg_bitfieldbytes, _pg_data, &_pg_byteindex, " + std::to_string(num) + ");\n";
             else
-                output += TAB_IN + "bytesToLeBytes(_pg_bitfieldbytes, _pg_data, &_pg_byteindex, " + QString::number(num) + ");\n";
+                output += TAB_IN + "bytesToLeBytes(_pg_bitfieldbytes, _pg_data, &_pg_byteindex, " + std::to_string(num) + ");\n";
 
             output += TAB_IN + "_pg_bitfieldindex = 0;\n\n";
 
@@ -3466,7 +3810,7 @@ QString ProtocolField::getEncodeStringForBitfield(int* bitcount, bool isStructur
             // Increment our byte counter, 1 to 8 bits should result in 1 byte, 9 to 16 bits in 2 bytes, etc.
             int bytes = ((*bitcount)+7)/8;
 
-            output += TAB_IN + "_pg_byteindex += " + QString().setNum(bytes) + "; // close bit field\n\n";
+            output += TAB_IN + "_pg_byteindex += " + std::to_string(bytes) + "; // close bit field\n\n";
 
         }// else if terminating a non-group
 
@@ -3490,19 +3834,19 @@ QString ProtocolField::getEncodeStringForBitfield(int* bitcount, bool isStructur
  * \param defaultEnabled should be true to enable defaults for this decode
  * \return The string to add to the source file that decodes this field.
  */
-QString ProtocolField::getDecodeStringForBitfield(int* bitcount, bool isStructureMember, bool defaultEnabled) const
+std::string ProtocolField::getDecodeStringForBitfield(int* bitcount, bool isStructureMember, bool defaultEnabled) const
 {
-    QString output;
+    std::string output;
 
     if(encodedType.isNull)
         return output;
 
     // If this field has a default value, or overrides a previous value
-    if(defaultEnabled && (!defaultString.isEmpty() || overridesPrevious))
+    if(defaultEnabled && (!defaultString.empty() || overridesPrevious))
     {
         int bytes;
 
-        QString lengthString;
+        std::string lengthString;
 
         // How many bytes do we need? From 1 to 8 bits we need 1 byte, from
         // 9 to 15 we need 2 bytes, etc. However, some bits may already have
@@ -3512,7 +3856,7 @@ QString ProtocolField::getDecodeStringForBitfield(int* bitcount, bool isStructur
         else
             bytes = ((*bitcount) + encodedType.bits + 7)/8;
 
-        lengthString = QString::number(bytes);
+        lengthString = std::to_string(bytes);
 
         // Technically we only need to check the length if bitcount is zero
         // (i.e. a new byte is being decoded) or if this bitfield will cross
@@ -3520,7 +3864,7 @@ QString ProtocolField::getDecodeStringForBitfield(int* bitcount, bool isStructur
         if(((*bitcount) == 0) || (bytes > 1))
         {
             output += TAB_IN + "if(_pg_byteindex + " + lengthString + " > _pg_numbytes)\n";
-            output += TAB_IN + "    return 1;\n";
+            output += TAB_IN + TAB_IN + "return 1;\n";
             output += "\n";
         }
     }
@@ -3530,18 +3874,22 @@ QString ProtocolField::getDecodeStringForBitfield(int* bitcount, bool isStructur
         int num = (bitfieldData.groupBits+7)/8;
         output += TAB_IN + "// Decode the entire group of bits in one shot\n";
         if(support.bigendian)
-            output += TAB_IN + "bytesFromBeBytes(_pg_bitfieldbytes, _pg_data, &_pg_byteindex, " + QString::number(num) + ");\n";
+            output += TAB_IN + "bytesFromBeBytes(_pg_bitfieldbytes, _pg_data, &_pg_byteindex, " + std::to_string(num) + ");\n";
         else
-            output += TAB_IN + "bytesFromLeBytes(_pg_bitfieldbytes, _pg_data, &_pg_byteindex, " + QString::number(num) + ");\n";
+            output += TAB_IN + "bytesFromLeBytes(_pg_bitfieldbytes, _pg_data, &_pg_byteindex, " + std::to_string(num) + ");\n";
 
         output += "\n";
     }
 
-    if(!comment.isEmpty())
+    if(!comment.empty())
         output += TAB_IN + "// " + comment + "\n";
 
-    QString bitssource;
-    QString bitsindex;
+    // Commenting indicating the range of the field
+    if(!inMemoryType.isNull && !inMemoryType.isBool && (encodedType.bits > 1) && !inMemoryType.isEnum)
+        output += TAB_IN + getRangeComment();
+
+    std::string bitssource;
+    std::string bitsindex;
     if(bitfieldData.groupMember)
     {
         bitssource = "_pg_bitfieldbytes";
@@ -3560,17 +3908,13 @@ QString ProtocolField::getDecodeStringForBitfield(int* bitcount, bool isStructur
     }
     else
     {        
-        QString argument;
-        QString cast;
+        std::string argument;
+        std::string cast;
 
         if(inMemoryType.isBool)
         {
-            if(isStructureMember)
-                argument = "_pg_user->" + name;     // Access via structure pointer
-            else
-                argument = "(*" + name + ")";   // Access via direct pointer
+            argument = getDecodeFieldAccess(isStructureMember);
 
-            // How we are going to access the field
             if(usesDecodeTempBitfield())
             {
                 // This decodes the bitfield into the temporary variable
@@ -3592,7 +3936,8 @@ QString ProtocolField::getDecodeStringForBitfield(int* bitcount, bool isStructur
                 // This tests the bitfield and sets the boolean
                 output += TAB_IN + argument + " = (" + ProtocolBitfield::getInnerDecodeString(bitssource, bitsindex, *bitcount, encodedType.bits) + ") ? true : false;\n";
             }
-        }
+
+        }// if in-memory is bool
         else
         {
             // How we are going to access the field
@@ -3603,114 +3948,98 @@ QString ProtocolField::getDecodeStringForBitfield(int* bitcount, bool isStructur
             else
             {
                 // If we are going to assign this bitfield directly to an enumeration,
-                // and we do not have an intermediate temporary field, then we need a cast
+                // and we do not have an intermediate temporary field, we need a cast
                 if(inMemoryType.isEnum)
                     cast = "(" + typeName + ")";
 
-                if(isStructureMember)
-                    argument = "_pg_user->" + name;     // Access via structure pointer
-                else
-                    argument = "(*" + name + ")";   // Access via direct pointer
+                argument = getDecodeFieldAccess(isStructureMember);
             }
 
-            // Additional commenting to describe the scaling
-            if(isFloatScaling() || isIntegerScaling())
-                output += TAB_IN + "// Range of " + name + " is " + getNumberString(encodedMin) + " to " + getNumberString(encodedMax) +  ".\n";
-
+            // The argument in this case is a temporary if we are scaling, or we are inMemoryType.isNull. Otherwise this sets the actual in memory value
             output += ProtocolBitfield::getDecodeString(TAB_IN, argument, cast, bitssource, bitsindex, *bitcount, encodedType.bits);
 
-            // Handle scaled bitfield
-            if(isFloatScaling() && !inMemoryType.isNull)
+            // Do the assignment from the temporary field
+            if(!inMemoryType.isNull && (usesDecodeTempBitfield() || usesDecodeTempLongBitfield()))
             {
-                QString cast;
+                output += TAB_IN + getDecodeFieldAccess(isStructureMember) + " = ";
 
-                if(isStructureMember)
-                    output += TAB_IN + "_pg_user->" + name + " = ";    // Access via structure pointer
-                else
-                    output += TAB_IN + "(*" + name + ")" + " = ";  // Access via direct pointer
-
-                if(!inMemoryType.isFloat)
-                    cast = "(" + typeName +")";
-
-                if(encodedType.bits > 32)
+                if(isFloatScaling())
                 {
-                    if((inMemoryType.bits != 64) && support.float64)
+                    std::string cast;
+
+                    if(!inMemoryType.isFloat)
                         cast = "(" + typeName +")";
 
-                    if(support.longbitfield)
+                    if(encodedType.bits > 32)
                     {
-                        if(support.float64)
-                            output += cast + "float64ScaledFromLongBitfield(" + argument;
+                        if((inMemoryType.bits != 64) && support.float64)
+                            cast = "(" + typeName +")";
+
+                        if(support.longbitfield)
+                        {
+                            if(support.float64)
+                                output += cast + "float64ScaledFromLongBitfield(" + argument;
+                            else
+                                output += cast + "float32ScaledFromLongBitfield(" + argument;
+                        }
                         else
-                            output += cast + "float32ScaledFromLongBitfield(" + argument;
+                        {
+                            if(support.float64)
+                                output += cast + "float64ScaledFromBitfield(" + argument;
+                            else
+                                output += cast + "float32ScaledFromBitfield(" + argument;
+                        }
+                    }
+                    else
+                        output += cast + "float32ScaledFromBitfield(" + argument;
+
+                    output += ", " + getNumberString(encodedMin, encodedType.bits);
+                    output += ", " + getNumberString(1.0, encodedType.bits) + "/" + getNumberString(scaler, encodedType.bits);
+                    output += ");\n";
+
+                }// if float scaled bitfield
+                else if(isIntegerScaling())
+                {
+                    if(scaler != 1.0)
+                    {
+                        if((encodedType.bits > 32) && support.longbitfield)
+                            output += inMemoryType.toSigString() + "ScaledFromLongBitfield(" + argument;
+                        else
+                            output += inMemoryType.toSigString() + "ScaledFromBitfield(" + argument;
+
+                        output += ", " + std::to_string((int)round(encodedMin)) + ", " + std::to_string((int)round(scaler)) + ");\n";
                     }
                     else
                     {
-                        if(support.float64)
-                            output += cast + "float64ScaledFromBitfield(" + argument;
-                        else
-                            output += cast + "float32ScaledFromBitfield(" + argument;
+                        // If the scaler is 1, add the min value directly - save the cost of the division
+                        output += "(" + std::to_string((int)round(encodedMin)) + " + " + argument + ");\n";
                     }
-                }
+
+                }// If integer scaling is being done
                 else
-                    output += cast + "float32ScaledFromBitfield(" + argument;
-
-                output += ", " + getNumberString(encodedMin, encodedType.bits);
-                output += ", " + getNumberString(1.0, encodedType.bits) + "/" + getNumberString(scaler, encodedType.bits);
-                output += ");\n";
-
-                if(isStructureMember)
-                    argument = "_pg_user->" + name;    // Access via structure pointer
-                else
-                    argument = "(*" + name + ")";  // Access via direct pointer
-
-            }// if scaled bitfield
-            else if(!inMemoryType.isNull)
-            {
-                // Do the assignment from the temporary field
-                if(usesDecodeTempBitfield() || usesDecodeTempLongBitfield())
                 {
-                    if(isIntegerScaling())
-                    {
-                        if(scaler != 1.0)
-                            argument = "(" + argument + "/" + QString::number(scaler, 'f', 0) + ")";
-
-                        if((encodedMin != 0) && !encodedType.isSigned)
-                            argument = "(" + argument + " + " + QString::number(encodedMin, 'f', 0) + ")";
-                    }
-
                     // If we are going to assign directly to an enumeration we need a cast
                     if(inMemoryType.isEnum)
                         cast = "(" + typeName + ")";
                     else
                         cast.clear();
 
-                    if(isStructureMember)
-                    {
-                        // Access via structure pointer
-                        output += TAB_IN + "_pg_user->" + name +   " = " + cast + argument + ";\n";
-                        argument = "_pg_user->" + name;
-                    }
-                    else
-                    {
-                        // Access via direct pointer
-                        output += TAB_IN + "(*" + name + ")" + " = " + cast + argument + ";\n";
-                        argument = "(*" + name + ")";
-                    }
-                }
+                    output += cast + argument + ";\n";
 
-            }// else if not scaled, but goes in memory
+                }// else no scaling, some other reason for the temporary
+
+            }// if a temporary value needs to get assigned to inMemory value
 
         }// else not bool
 
         if(checkConstant)
-        {
-            QString constantstring = getConstantString();
+        {            
+            std::string constantstring = getConstantString();
 
             // Verify the constant value
             output += TAB_IN + "// Decoded value must be " + constantstring + "\n";
-            output += TAB_IN + "if (" + argument + " != " + constantstring + ")\n";
-            output += TAB_IN + "    return 0;\n";
+            output += TAB_IN + "if(" + argument + " != " + constantstring + ")\n";
+            output += TAB_IN + TAB_IN + "return " + getReturnCode(false) + ";\n";
         }
 
     }// else if we do something with the decoded value
@@ -3730,7 +4059,7 @@ QString ProtocolField::getDecodeStringForBitfield(int* bitcount, bool isStructur
             // Increment our byte counter, 1 to 8 bits should result in 1 byte, 9 to 16 bits in 2 bytes, etc.
             int bytes = ((*bitcount)+7)/8;
 
-            output += TAB_IN + "_pg_byteindex += " + QString().setNum(bytes) + "; // close bit field\n\n";
+            output += TAB_IN + "_pg_byteindex += " + std::to_string(bytes) + "; // close bit field\n\n";
 
         }// else if terminating a non-group
 
@@ -3752,10 +4081,10 @@ QString ProtocolField::getDecodeStringForBitfield(int* bitcount, bool isStructur
  *        bitfields, and will be updated by this function.
  * \return The string to add to the source file that closes the bitfield.
  */
-QString ProtocolField::getCloseBitfieldString(int* bitcount) const
+std::string ProtocolField::getCloseBitfieldString(int* bitcount) const
 {
-    QString output;
-    QString spacing;
+    std::string output;
+    std::string spacing;
 
     if(*bitcount != 0)
     {
@@ -3795,26 +4124,20 @@ QString ProtocolField::getCloseBitfieldString(int* bitcount) const
  *        to the inMemoryType
  * \return The string to add to the source file to that encodes this field
  */
-QString ProtocolField::getEncodeStringForString(bool isStructureMember) const
+std::string ProtocolField::getEncodeStringForString(bool isStructureMember) const
 {
-    QString output;
-    QString lhs;
+    std::string output;
 
-    QString constantstring = getConstantString();
+    std::string constantstring = getConstantString();
 
     if(encodedType.isNull)
         return output;
 
-    if(isStructureMember)
-        lhs = "_pg_user->";
-    else
-        lhs = "";
-
-    if(!comment.isEmpty())
+    if(!comment.empty())
         output += "    // " + comment + "\n";
 
-    if(constantstring.isEmpty())
-        output += "    stringToBytes(" + lhs + name + ", _pg_data, &_pg_byteindex, " + array;
+    if(constantstring.empty())
+        output += "    stringToBytes(" + getEncodeFieldAccess(isStructureMember) + ", _pg_data, &_pg_byteindex, " + array;
     else
         output += "    stringToBytes(" + constantstring + ", _pg_data, &_pg_byteindex, " + array;
 
@@ -3836,26 +4159,19 @@ QString ProtocolField::getEncodeStringForString(bool isStructureMember) const
  * \param defaultEnabled should be true to handle defaults
  * \return The string to add to the source file to that decodes this field
  */
-QString ProtocolField::getDecodeStringForString(bool isStructureMember, bool defaultEnabled) const
+std::string ProtocolField::getDecodeStringForString(bool isStructureMember, bool defaultEnabled) const
 {
-    QString output;
-    QString spacing = TAB_IN;
+    std::string output;
+    std::string spacing = TAB_IN;
 
     if(encodedType.isNull)
         return output;
 
-    QString lhs;
-
-    if(isStructureMember)
-        lhs = "_pg_user->";
-    else
-        lhs = "";
-
-    if(!comment.isEmpty())
+    if(!comment.empty())
         output += spacing + "// " + comment + "\n";
 
     // If this field has a default value, or overrides a previous value
-    if(defaultEnabled && (!defaultString.isEmpty() || overridesPrevious))
+    if(defaultEnabled && (!defaultString.empty() || overridesPrevious))
     {
         if(inMemoryType.isFixedString)
         {
@@ -3863,7 +4179,7 @@ QString ProtocolField::getDecodeStringForString(bool isStructureMember, bool def
             output += spacing + "if(_pg_byteindex + " + array + " > _pg_numbytes)\n";
             output += spacing + TAB_IN + "return 1;\n";
             output += "\n";
-            output += spacing + "stringFromBytes(" + lhs + name + ", _pg_data, &_pg_byteindex, " + array + ", 1);\n";
+            output += spacing + "stringFromBytes(" + getDecodeFieldAccess(isStructureMember) + ", _pg_data, &_pg_byteindex, " + array + ", 1);\n";
         }
         else
         {
@@ -3873,28 +4189,28 @@ QString ProtocolField::getDecodeStringForString(bool isStructureMember, bool def
             output += "\n";
 
             // When pulling the bytes we have to control the maximum, it could be limited by the in memory space, or by the packet size
-            output += spacing + "stringFromBytes(" + lhs + name + ", _pg_data, &_pg_byteindex, " + array + " < (_pg_numbytes - _pg_byteindex) ? " + array + " : (_pg_numbytes - _pg_byteindex), 0);\n";
+            output += spacing + "stringFromBytes(" + getDecodeFieldAccess(isStructureMember) + ", _pg_data, &_pg_byteindex, " + array + " < (_pg_numbytes - _pg_byteindex) ? " + array + " : (_pg_numbytes - _pg_byteindex), 0);\n";
         }
     }
     else
     {
         if(inMemoryType.isFixedString)
         {
-            output += spacing + "stringFromBytes(" + lhs + name + ", _pg_data, &_pg_byteindex, " + array + ", 1);\n";
+            output += spacing + "stringFromBytes(" + getDecodeFieldAccess(isStructureMember) + ", _pg_data, &_pg_byteindex, " + array + ", 1);\n";
         }
         else
         {
-            output += spacing + "stringFromBytes(" + lhs + name + ", _pg_data, &_pg_byteindex, " + array + ", 0);\n";
+            output += spacing + "stringFromBytes(" + getDecodeFieldAccess(isStructureMember) + ", _pg_data, &_pg_byteindex, " + array + ", 0);\n";
         }
     }
 
     if(checkConstant)
     {
-        QString constantstring = getConstantString();
+        std::string constantstring = getConstantString();
         output += "\n";
         output += spacing + "// Decoded value must be " + constantstring + "\n";
-        output += spacing + "if (strncmp(" + lhs + name + ", " + constantstring + ", " + array + ") != 0)\n";
-        output += spacing + TAB_IN + "return 0;\n";
+        output += spacing + "if (strncmp(" + getDecodeFieldAccess(isStructureMember) + ", " + constantstring + ", " + array + ") != 0)\n";
+        output += spacing + TAB_IN + "return " + getReturnCode(false) + ";\n";
     }
 
     return output;
@@ -3907,89 +4223,68 @@ QString ProtocolField::getDecodeStringForString(bool isStructureMember, bool def
  * \param isStructureMember is true if this encodable is accessed by structure pointer
  * \return the string to add to the source to encode this structure
  */
-QString ProtocolField::getEncodeStringForStructure(bool isStructureMember) const
+std::string ProtocolField::getEncodeStringForStructure(bool isStructureMember) const
 {
-    QString output;
-    QString access;
-    QString spacing = TAB_IN;
+    std::string output;
+    std::string access;
+    std::string spacing = TAB_IN;
 
     if(encodedType.isNull)
         return output;
 
-    if(!comment.isEmpty())
+    if(!comment.empty())
         output += spacing + "// " + comment + "\n";
 
-    if(!dependsOn.isEmpty())
+    if(!dependsOn.empty())
     {
-        if(isStructureMember)
-            output += spacing + "if(_pg_user->" + dependsOn;
-        else
-            output += spacing + "if(" + dependsOn;
+        output += spacing + "if(" + getEncodeFieldAccess(isStructureMember, dependsOn);
 
-        if(!dependsOnValue.isEmpty())
+        if(!dependsOnValue.empty())
             output += " " + dependsOnCompare + " " + dependsOnValue;
 
-        output += spacing + ")\n{\n";
+        output += ")\n" + spacing + "{\n";
         spacing += TAB_IN;
     }
 
+    // The array iteration code
+    output += getEncodeArrayIterationCode(spacing, isStructureMember);
+
+    // Spacing for arrays
     if(isArray())
     {
-        if(variableArray.isEmpty())
-        {
-            output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
-        }
-        else
-        {
-            if(isStructureMember)
-                output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)_pg_user->" + variableArray + " && _pg_i < " + array + "; _pg_i++)\n";
-            else
-                output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)" + variableArray + " && _pg_i < " + array + "; _pg_i++)\n";
-        }
-
-
+        spacing += TAB_IN;
         if(is2dArray())
-        {
-            if(variable2dArray.isEmpty())
-            {
-                output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
-            }
-            else
-            {
-                if(isStructureMember)
-                    output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < (unsigned)_pg_user->" + variable2dArray + " && _pg_j < " + array2d + "; _pg_j++)\n";
-                else
-                    output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < (unsigned)" + variable2dArray + " && _pg_j < " + array2d + "; _pg_j++)\n";
-            }
-
-            if(isStructureMember)
-                access = "&_pg_user->" + name + "[_pg_i][_pg_j]";
-            else
-                access = "&" + name + "[_pg_i][_pg_j]";
-
-            output += spacing + "        encode" + typeName + "(_pg_data, &_pg_byteindex, " + access + ");\n";
-        }
-        else
-        {
-            if(isStructureMember)
-                access = "&_pg_user->" + name + "[_pg_i]";
-            else
-                access = "&" + name + "[_pg_i]";
-
-            output += spacing + "    encode" + typeName + "(_pg_data, &_pg_byteindex, " + access + ");\n";
-        }
+            spacing += TAB_IN;
     }
+
+    access = getEncodeFieldAccess(isStructureMember);
+
+    if(support.language == ProtocolSupport::c_language)
+        output += spacing + "encode" + typeName + "(_pg_data, &_pg_byteindex, " + access + ");\n";
     else
     {
-        if(isStructureMember)
-            access = "&_pg_user->" + name;
-        else
-            access = name;  // in this case, name is already pointer, so we don't need "&"
+        const ProtocolStructure* struc = parser->lookUpStructure(typeName);
 
-        output += spacing + "encode" + typeName + "(_pg_data, &_pg_byteindex, " + access + ");\n";
+        if((struc != nullptr) && (typeName != struc->getStructName()))
+        {
+            // We have an interesting case to handle here. This struct is
+            // redefining another struct. In which case we need to call the
+            // redefined encode function, and we do that by casting a pointer.
+            // This is a downcast, which is only valid if there are no virtual
+            // interfaces between here and the data we are going to touch.
+            /// TODO: is there a better way? A very complex topic...
+            if(isStructureMember || isArray())
+                output += spacing + "(static_cast<const " + typeName + "*>(&" + access + "))->encode(_pg_data, &_pg_byteindex);\n";
+            else
+                output += spacing + "(static_cast<const " + typeName + "*>(" + access + "))->encode(_pg_data, &_pg_byteindex);\n";
+        }
+        else if(isStructureMember || isArray())
+            output += spacing + access + ".encode(_pg_data, &_pg_byteindex);\n";
+        else
+            output += spacing + access + "->encode(_pg_data, &_pg_byteindex);\n";
     }
 
-    if(!dependsOn.isEmpty())
+    if(!dependsOn.empty())
         output += TAB_IN + "}\n";
 
     return output;
@@ -4004,95 +4299,73 @@ QString ProtocolField::getEncodeStringForStructure(bool isStructureMember) const
  *        to the inMemoryType
  * \return The string to add to the source file to that decodes this field
  */
-QString ProtocolField::getDecodeStringForStructure(bool isStructureMember) const
+std::string ProtocolField::getDecodeStringForStructure(bool isStructureMember) const
 {
-    QString output;
-    QString access;
-    QString spacing = "    ";
+    std::string output;
+    std::string access;
+    std::string spacing = TAB_IN;
 
     if(encodedType.isNull)
         return output;
 
-    if(!comment.isEmpty())
+    if(!comment.empty())
         output += "    // " + comment + "\n";
 
-    if(!dependsOn.isEmpty())
+    if(!dependsOn.empty())
     {
-        if(isStructureMember)
-            output += spacing + "if(_pg_user->" + dependsOn;
-        else
-            output += spacing + "if(" + dependsOn;
+        output += spacing + "if(" + getDecodeFieldAccess(isStructureMember, dependsOn);
 
-        if(!dependsOnValue.isEmpty())
+        if(!dependsOnValue.empty())
             output += " " + dependsOnCompare + " " + dependsOnValue;
 
         output += ")\n" + spacing + "{\n";
         spacing += TAB_IN;
     }
 
+    // The array iteration code
+    output += getDecodeArrayIterationCode(spacing, isStructureMember);
+
+    // Spacing for arrays
     if(isArray())
     {
-        if(variableArray.isEmpty())
-            output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
-        else
-        {
-            if(isStructureMember)
-                output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)_pg_user->" + variableArray + " && _pg_i < " + array + "; _pg_i++)\n";
-            else
-                output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)(*" + variableArray + ") && _pg_i < " + array + "; _pg_i++)\n";
-        }
-
-        output += spacing + "{\n";
-
+        spacing += TAB_IN;
         if(is2dArray())
-        {
-            if(variable2dArray.isEmpty())
-                output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
-            else
-            {
-                if(isStructureMember)
-                    output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < (unsigned)_pg_user->" + variable2dArray + " && _pg_j < " + array2d + "; _pg_j++)\n";
-                else
-                    output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < (unsigned)(*" + variable2dArray + ") && _pg_j < " + array2d + "; _pg_j++)\n";
-            }
+            spacing += TAB_IN;
+    }
 
-            output += spacing + "    {\n";
+    access = getDecodeFieldAccess(isStructureMember);
 
-            if(isStructureMember)
-                access = "&_pg_user->" + name + "[_pg_i][_pg_j]";
-            else
-                access = "&" + name + "[_pg_i][_pg_j]";
-
-            output += spacing + "        if(decode" + typeName + "(_pg_data, &_pg_byteindex, " + access + ") == 0)\n";
-            output += spacing + "            return 0;\n";
-            output += spacing + "    }\n";
-            output += spacing + "}\n";
-        }
-        else
-        {
-            if(isStructureMember)
-                access = "&_pg_user->" + name + "[_pg_i]";
-            else
-                access = "&" + name + "[_pg_i]";
-
-            output += spacing + "    if(decode" + typeName + "(_pg_data, &_pg_byteindex, " + access + ") == 0)\n";
-            output += spacing + "        return 0;\n";
-            output += spacing + "}\n";
-        }
-
+    if(support.language == ProtocolSupport::c_language)
+    {
+        output += spacing + "if(decode" + typeName + "(_pg_data, &_pg_byteindex, " + access + ") == 0)\n";
+        output += spacing + TAB_IN + "return 0;\n";
     }
     else
     {
-        if(isStructureMember)
-            access = "&_pg_user->" + name;
-        else
-            access = name;  // in this case, name is already pointer, so we don't need "&"
+        const ProtocolStructure* struc = parser->lookUpStructure(typeName);
 
-        output += spacing + "if(decode" + typeName + "(_pg_data, &_pg_byteindex, " + access + ") == 0)\n";
-        output += spacing + "    return 0;\n";
+        if((struc != nullptr) && (typeName != struc->getStructName()))
+        {
+            // We have an interesting case to handle here. This struct is
+            // redefining another struct. In which case we need to call the
+            // redefined encode function, and we do that by casting a pointer.
+            // This is a downcast, which is only valid if there are no virtual
+            // interfaces between here and the data we are going to touch.
+            /// TODO: is there a better way? A very complex topic...
+            if(isStructureMember || isArray())
+                output += spacing + "if((static_cast<" + typeName + "*>(&" + access + "))->decode(_pg_data, &_pg_byteindex) == false)\n";
+            else
+                output += spacing + "if((static_cast<" + typeName + "*>(" + access + "))->decode(_pg_data, &_pg_byteindex) == false)\n";
+        }
+        else if(isStructureMember || isArray())
+            output += spacing + "if(" + access + ".decode(_pg_data, &_pg_byteindex) == false)\n";
+        else
+            output += spacing + "if(" + access + "->decode(_pg_data, &_pg_byteindex) == false)\n";
+
+        output += spacing + TAB_IN + "return false;\n";
     }
 
-    if(!dependsOn.isEmpty())
+    if(!dependsOn.empty())
         output += TAB_IN + "}\n";
 
     return output;
@@ -4106,16 +4379,16 @@ QString ProtocolField::getDecodeStringForStructure(bool isStructureMember) const
  * 2. If in memory type is null use "0"
  * \return the constant value
  */
-QString ProtocolField::getConstantString(void) const
+std::string ProtocolField::getConstantString(void) const
 {
-    if (!constantString.isEmpty())
+    if (!constantString.empty())
     {
         if(encodedType.isString)
         {
             // constantValue is a string literal, so include the quotes. Except for
             // a special case. If constantValue ends in "()" then we assume its a
             // function or macro call
-            if(constantString.contains("(") && constantString.contains(")"))
+            if(endsWith(trimm(constantString), "()"))
                 return constantString;
             else
                 return "\"" + constantString + "\"";
@@ -4134,7 +4407,7 @@ QString ProtocolField::getConstantString(void) const
             return "0";
     }
     else
-        return QString();
+        return std::string();
 
 }// ProtocolField::getConstantString
 
@@ -4148,27 +4421,28 @@ QString ProtocolField::getConstantString(void) const
  *        to the inMemoryType
  * \return The string to add to the source file that encodes this field.
  */
-QString ProtocolField::getEncodeStringForField(bool isBigEndian, bool isStructureMember) const
+std::string ProtocolField::getEncodeStringForField(bool isBigEndian, bool isStructureMember) const
 {
-    QString output;
-    QString endian;
-    QString lengthString;
-    QString lhs;
-    QString constantstring = getConstantString();
+    std::string output;
+    std::string endian;
+    std::string lengthString;
+
+    std::string constantstring = getConstantString();
 
     if(encodedType.isNull)
         return output;
 
-    if(isStructureMember)
-        lhs = "_pg_user->";
-    else
-        lhs = "";
+    std::string spacing = TAB_IN;
 
-    if(!comment.isEmpty())
-        output += TAB_IN + "// " + comment + "\n";
+    if(!comment.empty())
+        output += spacing + "// " + comment + "\n";
+
+    // Additional commenting to describe the scaling
+    if(!inMemoryType.isNull && !inMemoryType.isBool && constantstring.empty())
+        output += spacing + getRangeComment(support.limitonencode);
 
     int length = encodedType.bits / 8;
-    lengthString.setNum(length);
+    lengthString = std::to_string(length);
 
     // Remember that we could be encoding an array
     if(isArray())
@@ -4189,140 +4463,100 @@ QString ProtocolField::getEncodeStringForField(bool isBigEndian, bool isStructur
     else
         endian = "";
 
-    QString spacing = TAB_IN;
-
-    if(!dependsOn.isEmpty())
+    if(!dependsOn.empty())
     {
-        if(isStructureMember)
-            output += spacing + "if(_pg_user->" + dependsOn;
-        else
-            output += spacing + "if(" + dependsOn;
+        output += spacing + "if(" + getEncodeFieldAccess(isStructureMember, dependsOn);
 
-        if(!dependsOnValue.isEmpty())
+        if(!dependsOnValue.empty())
             output += " " + dependsOnCompare + " " + dependsOnValue;
 
         output += ")\n" + spacing + "{\n";
         spacing += TAB_IN;
     }
 
+    std::string arrayspacing;
+    std::string argument = getEncodeFieldAccess(isStructureMember);
+
+    // The array iteration code
+    output += getEncodeArrayIterationCode(spacing, isStructureMember);
+
+    // Spacing for the array cases
+    if(isArray())
+    {
+        arrayspacing += TAB_IN;
+        if(is2dArray())
+            arrayspacing += TAB_IN;
+    }
+
+    // Argument may need to be limited. Constant encode overrides the argument
+    if(constantstring.empty())
+        argument = getLimitedArgument(argument);
+    else
+        argument = constantstring;
+
     if(encodedType.isFloat)
     {
         // In this case we are encoding as a floating point. Typically we
         // would not scale here, but there are cases where scaling is
         // interesting.
-        QString scalestring;
+        std::string scalestring;
 
         // Notice that encodedMax and encodedMin do not make sense since
         // the encoded type is float
         if(scaler != 1.0)
-        {
             scalestring = "*" + getNumberString(scaler, inMemoryType.bits);
-
-            // Additional commenting to describe the scaling
-            output += spacing + "// " + name + " is scaled by " + getNumberString(scaler) +  ".\n";
-
-        }
 
         // Notice that we have to cast to the
         // input parameter type, since the user might (for example) have
         // the in-memory type as a double, but the encoded as a float
-        QString cast = "(" + encodedType.toTypeString() + ")";
+        std::string cast = "(" + encodedType.toTypeString() + ")";
 
-        if(array.isEmpty())
-        {
-            if(constantstring.isEmpty())
-                output += spacing + "float" + QString().setNum(encodedType.bits) + "To" + endian + "Bytes(" + cast + lhs + name + scalestring + ", _pg_data, &_pg_byteindex";
-            else
-                output += spacing + "float" + QString().setNum(encodedType.bits) + "To" + endian + "Bytes(" + cast + constantstring + ", _pg_data, &_pg_byteindex";
+        output += spacing + arrayspacing + "float" + std::to_string(encodedType.bits) + "To" + endian + "Bytes(" + cast + argument + scalestring + ", _pg_data, &_pg_byteindex";
 
-            if((encodedType.bits == 16) || (encodedType.bits == 24))
-                output += ", " + QString().setNum(encodedType.sigbits);
+        if((encodedType.bits == 16) || (encodedType.bits == 24))
+            output += ", " + std::to_string(encodedType.sigbits);
 
-            output += ");\n";
-        }
-        else
-        {
-            if(variableArray.isEmpty())
-                output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
-            else
-                output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)" + lhs + variableArray + " && _pg_i < " + array + "; _pg_i++)\n";
+        output += ");\n";
 
-            if(is2dArray())
-            {
-                if(variable2dArray.isEmpty())
-                    output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
-                else
-                    output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < (unsigned)" + lhs + variable2dArray + " && _pg_j < " + array2d + "; _pg_j++)\n";
-
-                if(constantstring.isEmpty())
-                    output += spacing + TAB_IN + TAB_IN + "float" + QString().setNum(encodedType.bits) + "To" + endian + "Bytes(" + cast + lhs + name +  scalestring + "[_pg_i][_pg_j], _pg_data, &_pg_byteindex";
-                else
-                    output += spacing + TAB_IN + TAB_IN + "float" + QString().setNum(encodedType.bits) + "To" + endian + "Bytes(" + cast + constantstring + ", _pg_data, &_pg_byteindex";
-
-                if((encodedType.bits == 16) || (encodedType.bits == 24))
-                    output += ", " + QString().setNum(encodedType.sigbits);
-
-                output += ");\n";
-            }
-            else
-            {
-                if(constantstring.isEmpty())
-                    output += spacing + TAB_IN + "float" + QString().setNum(encodedType.bits) + "To" + endian + "Bytes(" + cast + lhs + name +  scalestring + "[_pg_i], _pg_data, &_pg_byteindex";
-                else
-                    output += spacing + TAB_IN + "float" + QString().setNum(encodedType.bits) + "To" + endian + "Bytes(" + cast + constantstring + ", _pg_data, &_pg_byteindex";
-
-                if((encodedType.bits == 16) || (encodedType.bits == 24))
-                    output += ", " + QString().setNum(encodedType.sigbits);
-
-                output += ");\n";
-            }
-        }
-    }
-    else if(isFloatScaling())
+    }// If the encoded type is floating point
+    else if(isFloatScaling() || isIntegerScaling())
     {
-        // Additional commenting to describe the scaling
-        output += spacing + "// Range of " + name + " is " + getNumberString(encodedMin) + " to " + getNumberString(encodedMax) +  ".\n";
+        std::string cast;
 
-        // Handle the array
-        if(!array.isEmpty())
+        output += spacing + arrayspacing;
+
+        // The in-memory part of the scaling
+        if(isFloatScaling())
         {
-            if(variableArray.isEmpty())
-                output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
-            else
-                output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)" + lhs + variableArray + " && _pg_i < " + array + "; _pg_i++)\n";
-
-            if(is2dArray())
+            // If we are floating scaling, we are going to use a float-encoding
+            // function, since even an integer encoding function would still
+            // have to cast to float to apply the scaler.
+            if((inMemoryType.bits > 32) && support.float64)
             {
-                if(variable2dArray.isEmpty())
-                    output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
-                else
-                    output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < (unsigned)" + lhs + variable2dArray + " && _pg_j < " + array2d + "; _pg_j++)\n";
+                output += "float64";
 
-                // indent the next line
-                output += TAB_IN;
+                // We may need a cast to float
+                if(!inMemoryType.isFloat)
+                    cast = "(double)";
+            }
+            else
+            {
+                output += "float32";
 
+                // We may need a cast to float
+                if((!inMemoryType.isFloat) || ((constantstring.find('.') != std::string::npos) && constantstring.back() != 'f'))
+                    cast = "(float)";
             }
 
-            // indent the next line
-            output += TAB_IN;
-        }
-
-        output += spacing;
-
-        // If we are scaling, then we are going to use a float-encoding
-        // function, since even an integer encoding function would still
-        // have to cast to float to apply the scaler.
-        if((inMemoryType.bits > 32) && support.float64)
-            output += "float64";
+        }// if float scaling
         else
-            output += "float32";
+        {
+            output += inMemoryType.toSigString(); // "int16" or "uint32" for example
 
-        output += "ScaledTo";
+        }// else not float scaling
 
-        // Now the encoded part:
-
-        // Number of bytes
-        output += QString().setNum(length);
+        // More of the encode function name includuing number of bytes
+        output += "ScaledTo" + std::to_string(length);
 
         // Signed or unsigned
         if(encodedType.isSigned)
@@ -4330,142 +4564,74 @@ QString ProtocolField::getEncodeStringForField(bool isBigEndian, bool isStructur
         else
             output += "Unsigned";
 
-        // More of the encode call signature, including endian
-        output += endian + "Bytes(";
+        // More of the encode call signature
+        output += endian + "Bytes(" + cast + argument + ", _pg_data, &_pg_byteindex";
 
-        // Check to see if we need to cast to float
-        if(!inMemoryType.isFloat)
+        if(isFloatScaling())
         {
-            if((inMemoryType.bits > 32) && support.float64)
-                output += "(double)";
-            else
-                output += "(float)";
-        }
+            // Signature changes for signed versus unsigned
+            if(!encodedType.isSigned)
+                output += ", " + getNumberString(encodedMin, inMemoryType.bits);
 
-        // Scaling a constant would be really weird...
-        if(constantstring.isEmpty())
-        {
-            // The reference to the data
-            output += lhs + name;
-
-            if(is2dArray())
-                output += "[_pg_i][_pg_j]";
-            else if(isArray())
-                output += "[_pg_i]";
+            output +=  ", " + getNumberString(scaler, inMemoryType.bits);
         }
         else
         {
-            // It may be weird, but we do support it. Notice the cast in case the constant string is not the correct type
-            if(inMemoryType.isFloat && (inMemoryType.bits <= 32) && constantstring.contains('.') && !constantstring.endsWith('f'))
-                output += "(" + inMemoryType.toTypeString() + ")(" + constantstring + ")";
-            else
-                output += constantstring;
+            // Signature changes for signed versus unsigned
+            if(!encodedType.isSigned)
+                output += ", " + std::to_string((int)round(encodedMin));
+
+            output +=  ", " + std::to_string((int)round(scaler));
         }
-
-        output += ", _pg_data, &_pg_byteindex";
-
-        // Signature changes for signed versus unsigned
-        if(!encodedType.isSigned)
-            output += ", " + getNumberString(encodedMin, inMemoryType.bits);
-
-        output +=  ", " + getNumberString(scaler, inMemoryType.bits);
 
         output += ");\n";
 
-    }// else if float scaling
+    }// else if scaling (floating or integer)
     else
     {
-        QString function;
+        std::string function;
 
         if(encodedType.isSigned)
         {
             // "int32ToBeBytes(" for example
-            function = "int" + QString().setNum(encodedType.bits) + "To" + endian + "Bytes(";
+            function = "int" + std::to_string(encodedType.bits) + "To" + endian + "Bytes(";
         }
         else
         {
             // "uint32ToBeBytes(" for example
-            function = "uint" + QString().setNum(encodedType.bits) + "To" + endian + "Bytes(";
+            function = "uint" + std::to_string(encodedType.bits) + "To" + endian + "Bytes(";
         }
 
         // Cast the constant string, just in case
-        if(!constantstring.isEmpty())
+        if(!constantstring.empty())
         {
             // "uint32ToBeBytes((uint32_t)(CONSTANT)" for example
             function += "(" + encodedType.toTypeString() + ")(" + constantstring + ")";
         }
         else
         {
-            // The value that is being encoded
-            QString value = lhs + name;
-
-            // the value may have array indices
-            if(isArray())
-            {
-                value += "[_pg_i]";
-                if(is2dArray())
-                    value += "[_pg_j]";
-            }
-
-            // Add the scaling operation if there is one
-            if(isIntegerScaling())
-            {
-                // Additional commenting to describe the scaling
-                output += spacing + "// Range of " + name + " is " + getNumberString(encodedMin) + " to " + getNumberString(encodedMax) +  ".\n";
-
-                // Subtract the minimum value
-                if((encodedMin != 0) && !encodedType.isSigned)
-                    value = "(" + value + " - " + QString::number(encodedMin, 'f', 0) + ")";
-
-                // Scale it up
-                if(scaler != 1.0)
-                    value = "(" + value + "*" + QString::number(scaler, 'f', 0) + ")";
-            }
-
             if(inMemoryType.isBool)
             {
-                function += "(" + value + " == true) ? 1 : 0";
+                function += "(" + argument + " == true) ? 1 : 0";
             }
-            else if(inMemoryType.isFloat || (inMemoryType.bits != encodedType.bits) || isIntegerScaling())
+            else if(inMemoryType.isFloat || (inMemoryType.bits > encodedType.bits) || (inMemoryType.isSigned != encodedType.isSigned))
             {
                 // Add a cast in case the encoded type is different from the in memory type
-
-                // "int32ToBeBytes((int32_t)((_pg_user->value - min)*scale)" for example
-                function += "(" + encodedType.toTypeString() + ")(" + value + ")";
+                function += "(" + encodedType.toTypeString() + ")(" + argument + ")";
             }
             else
-                function += value;
+                function += argument;
 
         }// else if not constant
 
         // This is the termination of the function and the line
         function += ", _pg_data, &_pg_byteindex);\n";
 
-        if(isArray())
-        {
-            if(variableArray.isEmpty())
-                output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
-            else
-                output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)" + lhs + variableArray + " && _pg_i < " + array + "; _pg_i++)\n";
-
-            spacing += TAB_IN;
-
-            if(is2dArray())
-            {
-                if(variable2dArray.isEmpty())
-                    output += spacing + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
-                else
-                    output += spacing + "for(_pg_j = 0; _pg_j < (unsigned)" + lhs + variable2dArray + " && _pg_j < " + array2d + "; _pg_j++)\n";
-
-                spacing += TAB_IN;
-            }
-        }
-
-        output += spacing + function;
+        output += spacing + arrayspacing + function;
 
     }// else if not float scaled
 
-    if(!dependsOn.isEmpty())
+    if(!dependsOn.empty())
         output += TAB_IN + "}\n";
 
     return output;
@@ -4474,15 +4640,22 @@ QString ProtocolField::getEncodeStringForField(bool isBigEndian, bool isStructur
 
 
 /*!
- * Check to see if we should be doing floating point scaling on this field
+ * Check to see if we should be doing floating point scaling on this field.
+ * This means the encode operation is going to call a function like
+ * `float32To...()`; and the decode function is going to call a function like
+ * `float32From...()`.
  * \return true if scaling should be based on floating point operations
  */
 bool ProtocolField::isFloatScaling(void) const
 {
+    // If the encoding is floating point then we are not scaling
+    if(encodedType.isFloat)
+        return false;
+
     if(inMemoryType.isFloat)
     {
         // If the user input a scaler string, then they want float scaling
-        if(!scalerString.isEmpty() || (scaler != 1.0))
+        if(!scalerString.empty() || (scaler != 1.0))
            return true;
 
         // The min value only matters if we are signed
@@ -4507,11 +4680,16 @@ bool ProtocolField::isFloatScaling(void) const
 
 
 /*!
- * Check to see if we should be doing integer scaling on this field
+ * Check to see if we should be doing integer scaling on this field. This
+ * means encode and decode functions will inline scaling operations using integers.
  * \return true if scaling should be based on integer operations
  */
 bool ProtocolField::isIntegerScaling(void) const
 {
+    // If the encoding is floating point then we are not scaling
+    if(encodedType.isFloat)
+        return false;
+
     if(!inMemoryType.isFloat)
     {
         if((scaler != 1.0) && (ceil(scaler) == floor(scaler)))
@@ -4537,27 +4715,20 @@ bool ProtocolField::isIntegerScaling(void) const
  * \param defaultEnabled should be true to enable default handling
  * \return The string to add to the source file that decodes this field.
  */
-QString ProtocolField::getDecodeStringForField(bool isBigEndian, bool isStructureMember, bool defaultEnabled) const
+std::string ProtocolField::getDecodeStringForField(bool isBigEndian, bool isStructureMember, bool defaultEnabled) const
 {
-    QString output;
-    QString endian;
-    QString spacing = TAB_IN;
-    QString lhs;
+    std::string output;
+    std::string endian;
+    std::string spacing = TAB_IN;
+    std::string arrayspacing;
+    std::string argument;
 
-    QString constantstring = getConstantString();
+    std::string constantstring = getConstantString();
 
     if(encodedType.isNull)
         return output;
 
-    if(isStructureMember)
-        lhs = "_pg_user->"; // member of a structure
-    else if(array.isEmpty())
-        lhs = "*";      // direct pointer
-    else
-        lhs = "";       // pointer with array de-referencing
-
-    if(!comment.isEmpty())
-        output += spacing + "// " + comment + "\n";
+    argument = getDecodeFieldAccess(isStructureMember);
 
     int length = encodedType.bits / 8;
 
@@ -4573,51 +4744,30 @@ QString ProtocolField::getDecodeStringForField(bool isBigEndian, bool isStructur
     else
         endian = "";
 
-    QString maxlengthString;
-
     // What is the length in bytes of this field, remember that we could be encoding an array
-    maxlengthString.setNum(length);
-
-    QString lengthString = maxlengthString;
+    std::string lengthString = std::to_string(length);
 
     if(isArray())
     {
-        maxlengthString += "*" + array;
-
-        if(variableArray.isEmpty())
+        if(variableArray.empty())
             lengthString += "*" + array;
         else
+            lengthString += "*" + getDecodeFieldAccess(isStructureMember, variableArray);
+
+        if(is2dArray())
         {
-            if(isStructureMember)
-                lengthString += "*_pg_user->" + variableArray;
+            if(variable2dArray.empty())
+                lengthString += "*" + array2d;
             else
-                lengthString += "*(*" + variableArray + ")";
+                lengthString += "*" + getDecodeFieldAccess(isStructureMember, variable2dArray);
         }
     }
 
-    if(is2dArray())
+    if(!dependsOn.empty())
     {
-        maxlengthString += "*" + array2d;
+        output += spacing + "if(" + getDecodeFieldAccess(isStructureMember, dependsOn);
 
-        if(variable2dArray.isEmpty())
-            lengthString += "*" + array2d;
-        else
-        {
-            if(isStructureMember)
-                lengthString += "*_pg_user->" + variable2dArray;
-            else
-                lengthString += "*(*" + variable2dArray + ")";
-        }
-    }
-
-    if(!dependsOn.isEmpty())
-    {
-        if(isStructureMember)
-            output += spacing + "if(_pg_user->" + dependsOn;
-        else
-            output += spacing + "if(*" + dependsOn;
-
-        if(!dependsOnValue.isEmpty())
+        if(!dependsOnValue.empty())
             output += " " + dependsOnCompare + " " + dependsOnValue;
 
         output += ")\n" + spacing + "{\n";
@@ -4625,26 +4775,35 @@ QString ProtocolField::getDecodeStringForField(bool isBigEndian, bool isStructur
     }
 
     // If this field has a default value, or overrides a previous value
-    if(defaultEnabled && (!defaultString.isEmpty() || overridesPrevious))
+    if(defaultEnabled && (!defaultString.empty() || overridesPrevious))
     {
         output += spacing + "if(_pg_byteindex + " + lengthString + " > _pg_numbytes)\n";
-        output += spacing + TAB_IN + "return 1;\n";
+        output += spacing + TAB_IN + "return " + getReturnCode(true) + ";\n";
         output += "\n";
     }
 
+    if(!comment.empty())
+        output += spacing + "// " + comment + "\n";
+
+    // Commenting indicating the range of the field
+    if(!inMemoryType.isNull && !inMemoryType.isBool)
+        output += spacing + getRangeComment();
+
+    if(!inMemoryType.isNull && checkConstant)
+        output += spacing + "// Decoded value must be " + constantstring + "\n";
+
     if(inMemoryType.isNull)
     {
-        if (checkConstant && array.isEmpty())
+        if(checkConstant && array.empty())
         {
-            output += spacing + "// Decoded value must be " + constantstring + "\n";
             output += spacing + "if (";
 
-            if (encodedType.isFloat)
+            if(encodedType.isFloat)
             {
                 if(encodedType.bits == 16)
-                    output += "float16From" + endian + "Bytes(_pg_data, &_pg_byteindex, " + QString::number(encodedType.sigbits) + ")";
+                    output += "float16From" + endian + "Bytes(_pg_data, &_pg_byteindex, " + std::to_string(encodedType.sigbits) + ")";
                 else if(encodedType.bits == 24)
-                    output += "float24From" + endian + "Bytes(_pg_data, &_pg_byteindex, " + QString::number(encodedType.sigbits) + ")";
+                    output += "float24From" + endian + "Bytes(_pg_data, &_pg_byteindex, " + std::to_string(encodedType.sigbits) + ")";
                 else if((inMemoryType.bits > 32) && support.float64)
                     output += "float64From" + endian + "Bytes(_pg_data, &_pg_byteindex)";
                 else
@@ -4652,278 +4811,175 @@ QString ProtocolField::getDecodeStringForField(bool isBigEndian, bool isStructur
             }
             else
             {
-                if (encodedType.isSigned)
+                if(encodedType.isSigned)
                     output += "int";
                 else
                     output += "uint";
 
-                output += QString().setNum(encodedType.bits) + "From" + endian + "Bytes(_pg_data, &_pg_byteindex)";
-
+                output += std::to_string(encodedType.bits) + "From" + endian + "Bytes(_pg_data, &_pg_byteindex)";
             }
 
             output += " != (" + encodedType.toTypeString() + ") " + constantstring + ")\n";
-            output += spacing + TAB_IN + "return 0;\n";
-        }
+            output += spacing + TAB_IN + "return " + getReturnCode(false) + ";\n";
+
+        }// If constant value must be checked
         else
         {
             // Skip over reserved space
-            if(comment.isEmpty())
+            if(comment.empty())
                 output += spacing + "// Skip over reserved space\n";
 
-            // Note how it's not possible to skip a variable amount of space
-            output += spacing + "_pg_byteindex += " + EncodedLength::collapseLengthString(maxlengthString, true) + ";\n";
+            output += spacing + "_pg_byteindex += " + lengthString + ";\n";
 
-            // TODO: Handle depends on variable array, and variable2darray
+        }// else constant value is not checked
 
-        }
-
-    }
-    else if(encodedType.isFloat)
-    {
-        // In this case we are encoding as a floating point. Typically we
-        // would not scale here, but there are cases where scaling is
-        // interesting.
-        QString scalestring;
-
-        // Notice that encodedMax and encodedMin do not make sense since
-        // the encoded type is float
-        if(scaler != 1.0)
-        {
-            scalestring = "(" + getNumberString(1.0, inMemoryType.bits) + "/" + getNumberString(scaler, inMemoryType.bits) + ")*" ;
-
-            // Additional commenting to describe the scaling
-            output += spacing + "// " + name + " is scaled by " + getNumberString(scaler) +  ".\n";
-        }
-
-        if(array.isEmpty())
-        {
-            output += spacing + lhs + name + " = " + scalestring + "float" + QString().setNum(encodedType.bits) + "From" + endian + "Bytes(_pg_data, &_pg_byteindex";
-
-            if((encodedType.bits == 16) || (encodedType.bits == 24))
-                output += ", " + QString::number(encodedType.sigbits);
-
-            output += ");\n";
-        }
-        else
-        {
-            if(variableArray.isEmpty())
-                output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
-            else
-            {
-                if(isStructureMember)
-                    output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)_pg_user->" + variableArray + " && _pg_i < " + array + "; _pg_i++)\n";
-                else
-                    output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)(*" + variableArray + ") && _pg_i < " + array + "; _pg_i++)\n";
-            }
-
-            if(is2dArray())
-            {
-                if(variable2dArray.isEmpty())
-                    output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
-                else
-                {
-                    if(isStructureMember)
-                        output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < (unsigned)_pg_user->" + variable2dArray + " && _pg_j < " + array2d + "; _pg_j++)\n";
-                    else
-                        output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < (unsigned)(*" + variable2dArray + ") && _pg_j < " + array2d + "; _pg_j++)\n";
-                }
-
-                output += spacing + TAB_IN + TAB_IN + lhs + name + "[_pg_i][_pg_j] = " + scalestring + "float" + QString().setNum(encodedType.bits) + "From" + endian + "Bytes(_pg_data, &_pg_byteindex";
-
-                if((encodedType.bits == 16) || (encodedType.bits == 24))
-                    output += ", " + QString::number(encodedType.sigbits);
-
-                output += ");\n";
-            }
-            else
-            {
-                output += spacing + TAB_IN + lhs + name + "[_pg_i] = " + scalestring + "float" + QString().setNum(encodedType.bits) + "From" + endian + "Bytes(_pg_data, &_pg_byteindex";
-
-                if((encodedType.bits == 16) || (encodedType.bits == 24))
-                    output += ", " + QString::number(encodedType.sigbits);
-
-                output += ");\n";
-            }
-
-        }// if array
-
-    }// if float
-    else if(isFloatScaling())
-    {
-        // Additional commenting to describe the scaling
-        output += spacing + "// Range of " + name + " is " + getNumberString(encodedMin) + " to " + getNumberString(encodedMax) +  ".\n";
-
-        // Handle the array
-        if(isArray())
-        {
-            if(variableArray.isEmpty())
-                output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
-            else
-                output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)" + lhs + variableArray + " && _pg_i < " + array + "; _pg_i++)\n";
-
-            if(is2dArray())
-            {
-                if(variable2dArray.isEmpty())
-                    output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
-                else
-                    output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < (unsigned)" + lhs + variable2dArray + " && _pg_j < " + array2d + "; _pg_j++)\n";
-
-                // start the next line
-                output += spacing + TAB_IN + TAB_IN + lhs + name + "[_pg_i][_pg_j] = ";
-            }
-            else
-            {
-                // start the next line
-                output += spacing + TAB_IN + lhs + name + "[_pg_i] = ";
-            }
-        }
-        else
-            output += spacing + lhs + name + " = ";
-
-        // The cast if the in memory type is not floating
-        if(!inMemoryType.isFloat)
-        {
-            if(inMemoryType.isSigned)
-                output += "(int" + QString().setNum(inMemoryType.bits) + "_t)";
-            else
-                output += "(uint" + QString().setNum(inMemoryType.bits) + "_t)";
-        }
-
-        if((inMemoryType.bits > 32) && support.float64)
-            output += "float64";
-        else
-            output += "float32";
-
-        output += "ScaledFrom";
-
-        // Now the encoded part:
-
-        // Number of bytes
-        output += QString().setNum(length);
-
-        // Signed or unsigned
-        if(encodedType.isSigned)
-            output += "Signed";
-        else
-            output += "Unsigned";
-
-        output += endian + "Bytes(_pg_data, &_pg_byteindex";
-
-        // Signature changes for signed versus unsigned
-        if(!encodedType.isSigned)
-            output += ", " + getNumberString(encodedMin, inMemoryType.bits);
-
-        output +=  ", " + getNumberString(1.0, inMemoryType.bits) + "/" + getNumberString(scaler, inMemoryType.bits);
-
-        output +=  ");\n";
-
-    }// if scaled to integer
+    }// If nothing in-memory
     else
     {
-        QString function;
+        output += getDecodeArrayIterationCode(spacing, isStructureMember);
 
-        if(encodedType.isSigned)
-            function = "int";
-        else
-            function = "uint";
-
-        // "int32FromBeBytes(data, &_pg_byteindex)" for example
-        function += QString().setNum(encodedType.bits) + "From" + endian + "Bytes(_pg_data, &_pg_byteindex)";
-
-        // The value that is being encoded
-        QString value = lhs + name;
-
-        // the value may have array indices
+        // Array spacing
         if(isArray())
         {
-            value += "[_pg_i]";
+            arrayspacing += TAB_IN;
             if(is2dArray())
-                value += "[_pg_j]";
-        }
+                arrayspacing += TAB_IN;
+         }
 
-        // The value goes on the left hand side and gets set equal to the function output;
-        value += " = ";
-
-        // Add the scaling operation if there is one
-        if(isIntegerScaling())
+        if(encodedType.isFloat)
         {
-            // Additional commenting to describe the scaling
-            output += spacing + "// Range of " + name + " is " + getNumberString(encodedMin) + " to " + getNumberString(encodedMax) +  ".\n";
+            // In this case we are encoding as a floating point. Typically we
+            // would not scale here, but there are cases where scaling is
+            // interesting.
+            std::string scalestring;
 
-            // Scale it down
-            // "(int32FromBeBytes(data, &_pg_byteindex)/scaler)" for example
+            // Notice that encodedMax and encodedMin do not make sense since
+            // the encoded type is float
             if(scaler != 1.0)
-                function = "(" + function + "/" + QString::number(scaler, 'f', 0) + ")";
+                scalestring = "(" + getNumberString(1.0, inMemoryType.bits) + "/" + getNumberString(scaler, inMemoryType.bits) + ")*" ;
 
-            // Add the minimum value
-            // "((int32FromBeBytes(data, &_pg_byteindex)/scaler) + encodedMin)" for example
-            if((encodedMin != 0) && !encodedType.isSigned)
-                function = "(" + function + " + " + QString::number(encodedMin, 'f', 0) + ")";
-        }
+            output += spacing + arrayspacing + argument + " = " + scalestring + "float" + std::to_string(encodedType.bits) + "From" + endian + "Bytes(_pg_data, &_pg_byteindex";
 
-        if(inMemoryType.isBool)
-        {
-            function = "(" + function + ") ? true : false";
-        }
-        else if(inMemoryType.isFloat || (inMemoryType.bits != encodedType.bits) || isIntegerScaling() || inMemoryType.isEnum)
-        {
-            // Add a cast in case the encoded type is different from the in memory type
-            // "int32ToBeBytes((int32_t)((_pg_user->value - min)*scale)" for example
-            function = "(" + typeName + ")" + function;
-        }
+            if((encodedType.bits == 16) || (encodedType.bits == 24))
+                output += ", " + std::to_string(encodedType.sigbits);
 
-        if(isArray())
+            output += ");\n";
+
+        }// if float
+        else if(isFloatScaling())
         {
-            if(variableArray.isEmpty())
-                output += spacing + "for(_pg_i = 0; _pg_i < " + array + "; _pg_i++)\n";
+            output += spacing + arrayspacing + argument + " = ";
+
+            // The cast if the in memory type is not floating
+            if(!inMemoryType.isFloat)
+                output += "(" + inMemoryType.toTypeString() + ")";
+
+            if((inMemoryType.bits > 32) && support.float64)
+                output += "float64";
+            else
+                output += "float32";
+
+            // The scaling decode function
+            output += "ScaledFrom" + std::to_string(length);
+
+            // Signed or unsigned
+            if(encodedType.isSigned)
+                output += "Signed";
+            else
+                output += "Unsigned";
+
+            output += endian + "Bytes(_pg_data, &_pg_byteindex";
+
+            // Signature changes for signed versus unsigned
+            if(!encodedType.isSigned)
+                output += ", " + getNumberString(encodedMin, inMemoryType.bits);
+
+            // Notice how the scaling value is the inverse for the decode function
+            output += ", " + getNumberString(1.0, inMemoryType.bits) + "/" + getNumberString(scaler, inMemoryType.bits);
+
+            output += ");\n";
+
+        }// if float scaling to integer
+        else if(isIntegerScaling())
+        {
+            output += spacing + arrayspacing + argument + " = ";
+
+            // If the scaler is 1, add the minimum value in directly - save the cost of division
+            if(scaler == 1.0)
+            {
+                // Might need a cast
+                if((inMemoryType.isSigned != encodedType.isSigned) || (inMemoryType.bits < encodedType.bits))
+                    output += "(" + inMemoryType.toTypeString() + ")";
+
+                // "int32FromBeBytes(data, &_pg_byteindex)" for example
+                output += "(" + encodedType.toSigString() + "From" + endian + "Bytes(_pg_data, &_pg_byteindex) + " + std::to_string((int)round(encodedMin)) + ");\n";
+            }
             else
             {
-                if(isStructureMember)
-                    output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)_pg_user->" + variableArray + " && _pg_i < " + array + "; _pg_i++)\n";
+                // "uint32" or "int16" for example
+                output += inMemoryType.toSigString();
+
+                // Scaled from a number of bytes
+                output += "ScaledFrom" + std::to_string(length);
+
+                // Signed or unsigned
+                if(encodedType.isSigned)
+                    output += "Signed";
                 else
-                    output += spacing + "for(_pg_i = 0; _pg_i < (unsigned)(*" + variableArray + ") && _pg_i < " + array + "; _pg_i++)\n";
+                    output += "Unsigned";
+
+                // In an endian order
+                output += endian + "Bytes(_pg_data, &_pg_byteindex";
+
+                // Signature changes for signed versus unsigned
+                if(!encodedType.isSigned)
+                    output += ", " + std::to_string((int)round(encodedMin));
+
+                output += ", " + std::to_string((int)round(scaler));
+
+                output += ");\n";
             }
 
-            value = TAB_IN + value;
+        }// else if integer scaling to integer
+        else
+        {
+            std::string function;
 
-            if(is2dArray())
+            if(encodedType.isSigned)
+                function = "int";
+            else
+                function = "uint";
+
+            // "int32FromBeBytes(data, &_pg_byteindex)" for example
+            function += std::to_string(encodedType.bits) + "From" + endian + "Bytes(_pg_data, &_pg_byteindex)";
+
+            if(inMemoryType.isBool)
             {
-                if(variable2dArray.isEmpty())
-                    output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < " + array2d + "; _pg_j++)\n";
-                else
-                {
-                    if(isStructureMember)
-                        output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < (unsigned)_pg_user->" + variable2dArray + " && _pg_j < " + array2d + "; _pg_j++)\n";
-                    else
-                        output += spacing + TAB_IN + "for(_pg_j = 0; _pg_j < (unsigned)(*" + variable2dArray + ") && _pg_j < " + array2d + "; _pg_j++)\n";
-                }
+                function = "(" + function + ") ? true : false";
+            }
+            else if(inMemoryType.isFloat || (inMemoryType.bits != encodedType.bits) || inMemoryType.isEnum)
+            {
+                // Add a cast in case the encoded type is different from the in memory type
+                // "int32ToBeBytes((int32_t)((_pg_user->value - min)*scale)" for example
+                function = "(" + typeName + ")" + function;
+            }
 
-                value = TAB_IN + value;
+            output += spacing + arrayspacing + argument + " = " + function + ";\n";
 
-            }// if 2D array
+        }// else not floating point scaled
 
-        }// if 1D array
-
-        output += TAB_IN + value + function + ";\n";
-
-    }// else not floating point scaled
+    }// else not null in-memory
 
     // Handle the check constant case, the null case was handled above
-    if(!inMemoryType.isNull && checkConstant && array.isEmpty())
+    if(!inMemoryType.isNull && checkConstant)
     {
-        output += "\n";
-        output += spacing + "// Decoded value must be " + constantstring + "\n";
-        output += spacing + "if (" + lhs + name + " != " + constantstring + ")\n";
-        output += spacing + spacing + "return 0;\n";
+        output += spacing + arrayspacing + "if (" + argument + " != " + constantstring + ")\n";
+        output += spacing + arrayspacing + TAB_IN + "return " + getReturnCode(false) + ";\n";
     }
 
     // Close the depends on block
-    if(!dependsOn.isEmpty())
-    {
-        // Remove the last four spaces
-        spacing.remove(spacing.size()-4, 4);
-        output += spacing + "}\n";
-    }
+    if(!dependsOn.empty())
+        output += TAB_IN + "}\n";
 
     return output;
 
@@ -4931,27 +4987,46 @@ QString ProtocolField::getDecodeStringForField(bool isBigEndian, bool isStructur
 
 
 /*!
- * Get a properly formatted number string for a floating point number
- * \param number is the number to turn into a string
- * \param bits is the number of bits in memory for this string. 32 or less will prompt a 'f' suffix on the string
+ * Get a properly formatted number string for a floating point number.
+ * \param number is the number to turn into a string.
+ * \param bits is the number of bits in memory for this string. 32 or
+ *        less will prompt a 'f' suffix on the string.
  * \return the string.
  */
-QString ProtocolField::getNumberString(double number, int bits) const
+std::string ProtocolField::getNumberString(double number, int bits) const
 {
-    QString string;
+    std::string string;
+    std::stringstream stream;
 
-    string.setNum(number, 'g', 16);
+    // We'll use scientific notation for numbers with more than 9 digits
+    if(fabs(number) > 999999999.0)
+        stream << std::scientific;
 
-    // Make sure we have a decimal point
-    if(!string.contains("."))
+    // Note DBL_DECIMAL_DIG is 17 in IEE-754. This results in unsightly
+    // rounding, for example 65.534999999999997 instead of 65.535. Hence
+    // use one less (which is what we used to have).
+    if((bits <= 32) || !support.float64)
+        stream << std::setprecision(std::numeric_limits<float>::max_digits10);
+    else
+        stream << std::setprecision(std::numeric_limits<double>::max_digits10 - 1);
+
+    // Now put the number in the stream
+    stream << number;
+
+    // And get a string for it
+    string = stream.str();
+
+    // Floating point constants in code should have decimal places
+    if(string.find('.') == std::string::npos)
         string += ".0";
 
-    // Float suffix
+    // Floating point constant
     if((bits <= 32) || !support.float64)
         string += "f";
 
     return string;
-}
+
+}// ProtocolField::getNumberString
 
 
 /*!
@@ -4961,7 +5036,7 @@ QString ProtocolField::getNumberString(double number, int bits) const
  * \param number is the number to turn into a string
  * \return the string.
  */
-QString ProtocolField::getDisplayNumberString(double number)
+std::string ProtocolField::getDisplayNumberString(double number)
 {
     if(number == -2*3.14159265358979323846)
     {
@@ -4989,34 +5064,28 @@ QString ProtocolField::getDisplayNumberString(double number)
     }
     else
     {
-        QString string;
+        std::string string;
+        std::stringstream stream;
 
-        string.setNum(number, 'g', 16);
+        // We'll use scientific notation for numbers with more than 9 digits
+        if(fabs(number) > 999999999.0)
+            stream << std::scientific;
 
-        // Make sure we have a decimal point
-        if(!string.contains("."))
+        // Note DBL_DECIMAL_DIG is 17 in IEE-754. This results in unsightly
+        // rounding, for example 65.534999999999997 instead of 65.535. Hence
+        // use one less (which is what we used to have).
+        stream << std::setprecision(std::numeric_limits<double>::max_digits10 - 1);
+
+        // Now put the number in the stream
+        stream << number;
+
+        // And get a string for it
+        string = stream.str();
+
+        // Floating point constants in code should have decimal places
+        if(string.find('.') == std::string::npos)
             string += ".0";
 
         return string;
     }
-}
-
-
-/*!
- * Compute the power of 2 raised to some bits
- * \param bits is the number of bits to raise to
- * \return the power of 2 raised to bits.
- */
-uint64_t ProtocolField::pow2(uint8_t bits) const
-{
-    uint64_t output = 2;
-
-    if(bits == 0)
-        return 1;
-
-    // If bits is 1, then 2 is output, if bits is 3 then 2 multiplies occur, yeilding 8
-    for(int i = 1; i < bits; i++)
-        output *= 2;
-
-    return output;
 }

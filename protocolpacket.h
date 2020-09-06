@@ -1,9 +1,6 @@
 #ifndef PROTOCOLPACKET_H
 #define PROTOCOLPACKET_H
 
-#include <QDomElement>
-#include <QDomNodeList>
-#include <QList>
 #include "protocolstructuremodule.h"
 
 // Forward declaration of sublass ProtocolDocumentation
@@ -13,33 +10,41 @@ class ProtocolPacket : public ProtocolStructureModule
 {
 public:
     //! Construct the packet parsing object, with details about the overall protocol
-    ProtocolPacket(ProtocolParser* parse, ProtocolSupport supported, const QString& protocolApi, const QString& protocolVersion);
+    ProtocolPacket(ProtocolParser* parse, ProtocolSupport supported, const std::string& protocolApi, const std::string& protocolVersion);
 
-    //! Destroy the protocol packet
-    virtual ~ProtocolPacket(void);
+    ~ProtocolPacket();
 
     //! Parse a packet from the DOM
-    virtual void parse(void);
+    void parse(void) override;
 
     //! Clear out any data
-    virtual void clear(void);
+    void clear(void) override;
 
     //! The hierarchical name of this object
-    virtual QString getHierarchicalName(void) const {return parent + ":" + name;}
+    std::string getHierarchicalName(void) const override {return parent + ":" + name;}
 
     //! Return top level markdown documentation for this packet
-    virtual QString getTopLevelMarkdown(bool global = false, const QStringList& ids = QStringList()) const;
+    std::string getTopLevelMarkdown(bool global = false, const std::vector<std::string>& ids = std::vector<std::string>()) const override;
 
     //! Get all the ID strings of this packet
-    void appendIds(QStringList& list) const {list.append(ids);}
+    void appendIds(std::vector<std::string>& list) const {list.insert(list.end(), ids.begin(), ids.end());}
 
     //! Return the extended packet name
-    QString extendedName() const { return support.prefix + this->name + support.packetStructureSuffix; }
+    std::string extendedName() const { return support.prefix + this->name + support.packetStructureSuffix; }
 
 protected:
 
-    //! Create the structure definition code
-    void createStructureDefinition(void);
+    //! Get the class declaration, for this packet only (not its children) for the C++ language
+    std::string getClassDeclaration_CPP(void) const override;
+
+    //! Create the helper functions for the packet
+    std::string createUtilityFunctions(const std::string& spacing) const override;
+
+    //! Write the top level initialize / constructor function.
+    void createTopLevelInitializeFunction(void);
+
+    //! Write data to the source and header for structure functions that do not use a packet.
+    void createTopLevelStructureFunctions(void);
 
     //! Create the functions that encode and decode the structure
     void createStructurePacketFunctions(void);
@@ -47,43 +52,76 @@ protected:
     //! Create the functions that encode and decode the parameters
     void createPacketFunctions(void);
 
-    //! Create the function that encodes the structure
-    void createStructureEncodeFunction(const QDomElement& e);
+    //! Get the signature of the packet structure encode function
+    std::string getStructurePacketEncodeSignature(bool insource) const;
 
-    //! Create the functions that encode and decode the structure
-    void createUtilityFunctions(const QDomElement& e);
+    //! Get the prototype for the structure packet encode function
+    std::string getStructurePacketEncodePrototype(const std::string& spacing) const;
+
+    //! Get the prototype for the structure packet encode function
+    std::string getStructurePacketEncodeBody(void) const;
+
+    //! Get the signature of the packet structure decode function
+    std::string getStructurePacketDecodeSignature(bool insource) const;
+
+    //! Get the prototype for the structure packet decode function
+    std::string getStructurePacketDecodePrototype(const std::string& spacing) const;
+
+    //! Get the prototype for the structure packet decode function
+    std::string getStructurePacketDecodeBody(void) const;
 
     //! Get the packet encode signature
-    QString getPacketEncodeSignature(bool _pg_) const;
+    std::string getParameterPacketEncodeSignature(bool insource) const;
+
+    //! Get the prototype for the parameter packet encode function
+    std::string getParameterPacketEncodePrototype(const std::string& spacing) const;
+
+    //! Get the prototype for the parameter packet encode function
+    std::string getParameterPacketEncodeBody(void) const;
 
     //! Get the packet decode signature
-    QString getPacketDecodeSignature(bool _pg_) const;
+    std::string getParameterPacketDecodeSignature(bool insource) const;
+
+    //! Get the prototype for the parameter packet decode function
+    std::string getParameterPacketDecodePrototype(const std::string& spacing) const;
+
+    //! Get the prototype for the parameter packet decode function
+    std::string getParameterPacketDecodeBody(void) const;
 
     //! Get the packet encode comment
-    QString getPacketEncodeBriefComment(void) const;
+    std::string getPacketEncodeBriefComment(void) const;
 
     //! Get the packet decode comment
-    QString getPacketDecodeBriefComment(void) const;
+    std::string getPacketDecodeBriefComment(void) const;
 
     //! Get the parameter list part of a encode signature like ", type1 name1, type2 name2 ... "
-    QString getDataEncodeParameterList(void) const;
+    std::string getDataEncodeParameterList(void) const;
 
     //! Get the parameter list part of a decode signature like ", type1* name1, type2 name2[3] ... "
-    QString getDataDecodeParameterList(void) const;
+    std::string getDataDecodeParameterList(void) const;
 
     //! Get the structure encode comment
-    QString getDataEncodeBriefComment(void) const;
+    std::string getDataEncodeBriefComment(void) const;
 
     //! Get the structure decode comment
-    QString getDataDecodeBriefComment(void) const;
+    std::string getDataDecodeBriefComment(void) const;
 
 protected:
 
+    //! Flag to treat this packet as a structure that other structures can reference
+    bool useInOtherPackets;
+
+    //! Flag to output parameter functions
+    bool parameterFunctions;
+
+    //! Flag to output structure functions
+    bool structureFunctions;
+
     //! Packet identifier string
-    QStringList ids;
+    std::vector<std::string> ids;
 
     //! List of document objects
-    QList<ProtocolDocumentation*> documentList;
+    std::vector<ProtocolDocumentation*> documentList;
 };
 
 #endif // PROTOCOLPACKET_H

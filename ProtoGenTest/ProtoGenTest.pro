@@ -24,10 +24,12 @@ SOURCES += main.cpp \
     Engine.c \
     base_types.c \
     compare/base_compare.cpp \
+    compare/base_print.cpp \
     fielddecode.c \
     fieldencode.c \
     floatspecial.c \
     GPS.c \
+    globaldependson.c \
     map/base_map.cpp \
     scaleddecode.c \
     scaledencode.c \
@@ -44,7 +46,9 @@ SOURCES += main.cpp \
 
 HEADERS += \
     base_types.h \
-    compare/base_compare.h \
+    compare/base_compare.hpp \
+    compare/base_print.hpp \
+    globaldependson.h \
     indices.h \
     DemolinkProtocol.h \
     Engine.h \
@@ -52,7 +56,7 @@ HEADERS += \
     fieldencode.h \
     floatspecial.h \
     GPS.h \
-    map/base_map.h \
+    map/base_map.hpp \
     scaleddecode.h \
     scaledencode.h \
     TelemetryPacket.h \
@@ -62,10 +66,11 @@ HEADERS += \
     bitfieldtest.h \
     definitions/verify.h \
     OtherDefinitions.h \
+    translation.h \
     verify/dateverify.h \
-    compare/compareDemolink.h \
-    compare/printDemolink.h \
-    map/mapDemolink.h
+    compare/compareDemolink.hpp \
+    compare/printDemolink.hpp \
+    map/mapDemolink.hpp
 
 OTHER_FILES += \
     Doxyfile

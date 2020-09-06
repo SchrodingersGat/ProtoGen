@@ -5,156 +5,171 @@
 #include "protocolfile.h"
 #include "enumcreator.h"
 #include "protocolbitfield.h"
-#include <QString>
-#include <QDomElement>
+#include <string>
 
 class ProtocolStructureModule : public ProtocolStructure
 {
-    // We allow ProtocolBitfield to access our protected members
-    friend class ProtocolBitfield;
-
 public:
 
     //! Construct the structure parsing object, with details about the overall protocol
-    ProtocolStructureModule(ProtocolParser* parse, ProtocolSupport supported, const QString& protocolApi, const QString& protocolVersion);
+    ProtocolStructureModule(ProtocolParser* parse, ProtocolSupport supported, const std::string& protocolApi, const std::string& protocolVersion);
 
     //! Parse a packet from the DOM
-    virtual void parse(void) Q_DECL_OVERRIDE;
+    void parse(void) override;
 
     //! Reset our data contents
-    virtual void clear(void) Q_DECL_OVERRIDE;
+    void clear(void) override;
 
     //! Destroy the protocol packet
     ~ProtocolStructureModule(void);
 
     //! Return the include directives needed for this encodable
-    virtual void getIncludeDirectives(QStringList& list) const Q_DECL_OVERRIDE;
+    void getIncludeDirectives(std::vector<std::string>& list) const override;
+
+    //! Return the include directives that go into source code for this encodable
+    void getSourceIncludeDirectives(std::vector<std::string>& list) const override;
 
     //! Return the include directives needed for this encodable's init and verify functions
-    virtual void getInitAndVerifyIncludeDirectives(QStringList& list) const Q_DECL_OVERRIDE;
+    void getInitAndVerifyIncludeDirectives(std::vector<std::string>& list) const override;
 
     //! Return the include directives needed for this encodable's map functions
-    virtual void getMapIncludeDirectives(QStringList& list) const Q_DECL_OVERRIDE;
+    void getMapIncludeDirectives(std::vector<std::string>& list) const override;
 
     //! Return the include directives needed for this encodable's compare functions
-    virtual void getCompareIncludeDirectives(QStringList& list) const Q_DECL_OVERRIDE;
+    void getCompareIncludeDirectives(std::vector<std::string>& list) const override;
 
     //! Return the include directives needed for this encodable's print functions
-    virtual void getPrintIncludeDirectives(QStringList& list) const Q_DECL_OVERRIDE;
+    void getPrintIncludeDirectives(std::vector<std::string>& list) const override;
 
     //! Get the name of the header file that encompasses this structure definition
-    QString getDefinitionFileName(void) const {return structfile->fileName();}
+    std::string getDefinitionFileName(void) const {return structHeader->fileName();}
 
     //! Get the name of the header file that encompasses this structure interface functions
-    QString getHeaderFileName(void) const {return header.fileName();}
+    std::string getHeaderFileName(void) const {return header.fileName();}
 
     //! Get the name of the source file for this structure
-    QString getSourceFileName(void) const {return source.fileName();}
+    std::string getSourceFileName(void) const {return source.fileName();}
 
     //! Get the path of the header file that encompasses this structure definition
-    QString getDefinitionFilePath(void) const {return structfile->filePath();}
+    std::string getDefinitionFilePath(void) const {return structHeader->filePath();}
 
     //! Get the path of the header file that encompasses this structure interface functions
-    QString getHeaderFilePath(void) const {return header.filePath();}
+    std::string getHeaderFilePath(void) const {return header.filePath();}
 
     //! Get the path of the source file for this structure
-    QString getSourceFilePath(void) const {return source.filePath();}
+    std::string getSourceFilePath(void) const {return source.filePath();}
 
     //! Get the name of the header file that encompasses this structure verify functions
-    QString getVerifyHeaderFileName(void) const {return verifyheaderfile->fileName();}
+    std::string getVerifyHeaderFileName(void) const {return (verifyHeader == nullptr) ? std::string() : verifyHeader->fileName();}
 
     //! Get the name of the source file that encompasses this structure verify functions
-    QString getVerifySourceFileName(void) const {return verifysourcefile->fileName();}
+    std::string getVerifySourceFileName(void) const {return (verifySource == nullptr) ? std::string() : verifySource->fileName();}
 
     //! Get the path of the header file that encompasses this structure verify functions
-    QString getVerifyHeaderFilePath(void) const {return verifyheaderfile->filePath();}
+    std::string getVerifyHeaderFilePath(void) const {return (verifyHeader == nullptr) ? std::string() : verifyHeader->filePath();}
 
     //! Get the path of the source file that encompasses this structure verify functions
-    QString getVerifySourceFilePath(void) const {return verifysourcefile->filePath();}
+    std::string getVerifySourceFilePath(void) const {return (verifySource == nullptr) ? std::string() : verifySource->filePath();}
 
     //! Get the name of the header file that encompasses this structure comparison functions
-    QString getCompareHeaderFileName(void) const {return compareHeader.fileName();}
+    std::string getCompareHeaderFileName(void) const {return (compareHeader == nullptr) ? std::string() : compareHeader->fileName();}
 
     //! Get the name of the source file that encompasses this structure comparison functions
-    QString getCompareSourceFileName(void) const {return compareSource.fileName();}
+    std::string getCompareSourceFileName(void) const {return (compareSource == nullptr) ? std::string() : compareSource->fileName();}
 
     //! Get the path of the header file that encompasses this structure comparison functions
-    QString getCompareHeaderFilePath(void) const {return compareHeader.filePath();}
+    std::string getCompareHeaderFilePath(void) const {return (compareHeader == nullptr) ? std::string() : compareHeader->filePath();}
 
     //! Get the path of the source file that encompasses this structure comparison functions
-    QString getCompareSourceFilePath(void) const {return compareSource.filePath();}
+    std::string getCompareSourceFilePath(void) const {return (compareSource == nullptr) ? std::string() : compareSource->filePath();}
 
     //! Get the name of the header file that encompasses this structure comparison functions
-    QString getPrintHeaderFileName(void) const {return printHeader.fileName();}
+    std::string getPrintHeaderFileName(void) const {return (printHeader == nullptr) ? std::string() : printHeader->fileName();}
 
     //! Get the name of the source file that encompasses this structure comparison functions
-    QString getPrintSourceFileName(void) const {return printSource.fileName();}
+    std::string getPrintSourceFileName(void) const {return (printSource == nullptr) ? std::string() : printSource->fileName();}
 
     //! Get the path of the header file that encompasses this structure comparison functions
-    QString getPrintHeaderFilePath(void) const {return printHeader.filePath();}
+    std::string getPrintHeaderFilePath(void) const {return (printHeader == nullptr) ? std::string() : printHeader->filePath();}
 
     //! Get the path of the source file that encompasses this structure comparison functions
-    QString getPrintSourceFilePath(void) const {return printSource.filePath();}
+    std::string getPrintSourceFilePath(void) const {return (printSource == nullptr) ? std::string() : printSource->filePath();}
 
     //! Get the name of the header file that encompasses this structure map functions
-    QString getMapHeaderFileName(void) const {return mapHeader.fileName();}
-
-    //! Get the path of the header file that encompasses this structure map functions
-    QString getMapHeaderFilePath(void) const {return mapHeader.filePath();}
+    std::string getMapHeaderFileName(void) const {return (mapHeader == nullptr) ? std::string() : mapHeader->fileName();}
 
     //! Get the name of the source file that encompasses this structure map functions
-    QString getMapSourceFileName(void) const {return mapSource.fileName();}
+    std::string getMapSourceFileName(void) const {return (mapSource == nullptr) ? std::string() : mapSource->fileName();}
+
+    //! Get the path of the header file that encompasses this structure map functions
+    std::string getMapHeaderFilePath(void) const {return (mapHeader == nullptr) ? std::string() : mapHeader->filePath();}
 
     //! Get the path of the source file that encompasses this structure map functions
-    QString getMapSourceFilePath(void) const {return mapSource.filePath();}
+    std::string getMapSourceFilePath(void) const {return (mapSource == nullptr) ? std::string() : mapSource->filePath();}
 
 protected:
 
     //! Setup the files, which accounts for all the ways the files can be organized for this structure.
-    void setupFiles(QString moduleName,
-                    QString defheadermodulename,
-                    QString verifymodulename,
-                    QString comparemodulename,
-                    QString printmodulename,
-                    QString mapmodulename,
-                    bool forceStructureDeclaration = true, bool outputUtilities = true, const ProtocolStructureModule* redefines = NULL);
+    void setupFiles(std::string moduleName,
+                    std::string defheadermodulename,
+                    std::string verifymodulename,
+                    std::string comparemodulename,
+                    std::string printmodulename,
+                    std::string mapmodulename,
+                    bool forceStructureDeclaration = true, bool outputUtilities = true);
+
+    //! Create utility functions for structure lengths
+    std::string createUtilityFunctions(const std::string& spacing) const override;
 
     //! Issue warnings for the structure module.
-    void issueWarnings(const QDomNamedNodeMap& map);
+    void issueWarnings(const XMLAttribute* map);
 
     //! Write data to the source and header files to encode and decode this structure and all its children
-    void createStructureFunctions(const ProtocolStructureModule* redefines = NULL);
+    void createStructureFunctions(void);
 
     //! Create the functions that encode/decode sub stuctures.
-    void createSubStructureFunctions(const ProtocolStructureModule* redefines = NULL);
+    void createSubStructureFunctions(void);
 
     //! Write data to the source and header files to encode and decode this structure but not its children
-    void createTopLevelStructureFunctions(const ProtocolStructureModule* redefines = NULL);
+    void createTopLevelStructureFunctions(void);
+
+    //! Write data to the source and header files for helper functions for this structure but not its children
+    void createTopLevelStructureHelperFunctions(void);
+
+    //! Get the text used to print a formatted string function
+    static std::string getToFormattedStringFunction(void);
 
     //! Get the text used to extract text for text read functions
-    static QString getExtractTextFunction(void);
+    static std::string getExtractTextFunction(void);
 
+    // These files are always used
     ProtocolSourceFile source;          //!< The source file (*.c)
     ProtocolHeaderFile header;          //!< The header file (*.h)
-    ProtocolHeaderFile defheader;       //!< The header file name for the structure definition
-    ProtocolSourceFile verifySource;    //!< The source file for verify code (*.c)
-    ProtocolHeaderFile verifyHeader;    //!< The header file for verify code (*.h)
-    ProtocolSourceFile compareSource;   //!< The source file for comparison code (*.cpp)
-    ProtocolHeaderFile compareHeader;   //!< The header file for comparison code (*.h)
-    ProtocolSourceFile printSource;     //!< The source file for print code (*.cpp)
-    ProtocolHeaderFile printHeader;     //!< The header file for print code (*.h)
-    ProtocolSourceFile mapSource;       //!< The source file for map code (*.cpp)
-    ProtocolHeaderFile mapHeader;       //!< The header file for map code (*.h)
-    ProtocolHeaderFile* structfile;     //!< Reference to the file that holds the structure definition
-    ProtocolHeaderFile* verifyheaderfile;   //!< Reference to the file that holds the verify prototypes
-    ProtocolSourceFile* verifysourcefile;   //!< Reference to the file that holds the verify source code
-    QString api;                    //!< The protocol API enumeration
-    QString version;                //!< The version string
-    bool encode;                    //!< True if the encode function is output
-    bool decode;                    //!< True if the decode function is output
-    bool compare;                   //!< True if the comparison function is output
-    bool print;                     //!< True if the textPrint function is output
-    bool mapEncode;                 //!< True if the mapEncode function is output
+
+    // These files are optional - the outputs could be in source or header
+    ProtocolHeaderFile _structHeader;   //!< Optional header file for the structure definition
+    ProtocolSourceFile _verifySource;   //!< Optional source file for verify code (*.c)
+    ProtocolHeaderFile _verifyHeader;   //!< Optional header file for verify code (*.h)
+    ProtocolSourceFile _compareSource;  //!< Optional source file for comparison code (*.cpp)
+    ProtocolHeaderFile _compareHeader;  //!< Optional header file for comparison code (*.h)
+    ProtocolSourceFile _printSource;    //!< Optional source file for print code (*.cpp)
+    ProtocolHeaderFile _printHeader;    //!< Optional header file for print code (*.h)
+    ProtocolSourceFile _mapSource;      //!< Optional source file for map code (*.cpp)
+    ProtocolHeaderFile _mapHeader;      //!< Optional header file for map code (*.h)
+
+    // These are the pointers that get aliased to the correct output file
+    ProtocolHeaderFile* structHeader;   //!< Pointer to the header file for the structure definition
+    ProtocolSourceFile* verifySource;   //!< Pointer to the source file for verify code (*.c)
+    ProtocolHeaderFile* verifyHeader;   //!< Pointer to the header file for verify code (*.h)
+    ProtocolSourceFile* compareSource;  //!< Pointer to the source file for comparison code (*.cpp)
+    ProtocolHeaderFile* compareHeader;  //!< Pointer to the header file for comparison code (*.h)
+    ProtocolSourceFile* printSource;    //!< Pointer to the source file for print code (*.cpp)
+    ProtocolHeaderFile* printHeader;    //!< Pointer to the header file for print code (*.h)
+    ProtocolSourceFile* mapSource;      //!< Pointer to the source file for map code (*.cpp)
+    ProtocolHeaderFile* mapHeader;      //!< Pointer to the header file for map code (*.h)
+
+    std::string api;                    //!< The protocol API enumeration
+    std::string version;                //!< The version string
 };
 
 #endif // PROTOCOLSTRUCTUREMODULE_H

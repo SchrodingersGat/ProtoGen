@@ -5,12 +5,13 @@
 /*!
  * Construct a blank protocol field
  * \param parse points to the global protocol parser that owns everything
- * \param Parent is the hierarchical name of the owning object
+ * \param parent is the hierarchical name of the owning object
  * \param supported indicates what the protocol can support
  */
-ProtocolCode::ProtocolCode(ProtocolParser* parse, QString Parent, ProtocolSupport supported):
-    Encodable(parse, Parent, supported)
+ProtocolCode::ProtocolCode(ProtocolParser* parse, std::string parent, ProtocolSupport supported):
+    Encodable(parse, parent, supported)
 {
+    attriblist = {"name", "encode", "decode", "encode_c", "decode_c", "encode_cpp", "decode_cpp", "encode_python", "decode_python", "comment", "include"};
 }
 
 
@@ -21,6 +22,11 @@ void ProtocolCode::clear(void)
 
     encode.clear();
     decode.clear();
+    encodecpp.clear();
+    decodecpp.clear();
+    encodepython.clear();
+    decodepython.clear();
+    include.clear();
 }
 
 
@@ -31,34 +37,29 @@ void ProtocolCode::parse(void)
 {
     clear();
 
-    QDomNamedNodeMap map = e.attributes();
+    if(e == nullptr)
+        return;
+
+    const XMLAttribute* map = e->FirstAttribute();
 
     // We use name as part of our debug outputs, so its good to have it first.
-    name = ProtocolParser::getAttribute("name", map);
+    name = ProtocolParser::getAttribute("name", map, "_unknown");
+    encode = ProtocolParser::getAttribute("encode_c", map);
+    decode = ProtocolParser::getAttribute("decode_c", map);
+    encodecpp = ProtocolParser::getAttribute("encode_cpp", map);
+    decodecpp = ProtocolParser::getAttribute("decode_cpp", map);
+    encodepython = ProtocolParser::getAttribute("encode_python", map);
+    decodepython = ProtocolParser::getAttribute("decode_python", map);
+    comment = ProtocolParser::getAttribute("comment", map);
+    include = ProtocolParser::getAttribute("include", map);
 
-    if(name.isEmpty())
-        name = "_unknown";
+    if(encode.empty())
+        encode = ProtocolParser::getAttribute("encode", map);
 
-    for(int i = 0; i < map.count(); i++)
-    {
-        QDomAttr attr = map.item(i).toAttr();
-        if(attr.isNull())
-            continue;
+    if(decode.empty())
+        decode = ProtocolParser::getAttribute("decode", map);
 
-        QString attrname = attr.name();
-
-        if(attrname.compare("name", Qt::CaseInsensitive) == 0)
-            name = attr.value().trimmed();
-        else if(attrname.compare("encode", Qt::CaseInsensitive) == 0)
-            encode = attr.value().trimmed();
-        else if(attrname.compare("decode", Qt::CaseInsensitive) == 0)
-            decode = attr.value().trimmed();
-        else if(attrname.compare("comment", Qt::CaseInsensitive) == 0)
-            comment = attr.value().trimmed();
-        else if(support.disableunrecognized == false)
-            emitWarning("Unrecognized attribute \"" + attrname + "\"");
-
-    }// for all attributes
+    testAndWarnAttributes(map);
 
 }// ProtocolCode::parse
 
@@ -73,23 +74,31 @@ void ProtocolCode::parse(void)
  *        to the inMemoryType, ignored.
  * \return The string to add to the source file for this code.
  */
-QString ProtocolCode::getEncodeString(bool isBigEndian, int* bitcount, bool isStructureMember) const
+std::string ProtocolCode::getEncodeString(bool isBigEndian, int* bitcount, bool isStructureMember) const
 {
-    Q_UNUSED(isBigEndian);
-    Q_UNUSED(bitcount);
-    Q_UNUSED(isStructureMember);
+    (void)isBigEndian;
+    (void)bitcount;
+    (void)isStructureMember;
 
-    QString output;
+    std::string output;
 
-    if(encode.isEmpty())
-        return output;
+    if((support.language == ProtocolSupport::c_language) && !encode.empty())
+    {
+        if(!comment.empty())
+            output += TAB_IN + "// " + comment + "\n";
 
-    if(!comment.isEmpty())
-        output += "    // " + comment + "\n";
+        output += TAB_IN + encode + "\n";
+    }
+    else if((support.language == ProtocolSupport::cpp_language) && !encodecpp.empty())
+    {
+        if(!comment.empty())
+            output += TAB_IN + "// " + comment + "\n";
 
-    output += "    " + encode + "\n";
+        output += TAB_IN + encodecpp + "\n";
+    }
 
     return output;
+
 }
 
 
@@ -104,23 +113,39 @@ QString ProtocolCode::getEncodeString(bool isBigEndian, int* bitcount, bool isSt
  * \param defaultEnabled should be true to handle defaults, ignored.
  * \return The string to add to the source file for this code.
  */
-QString ProtocolCode::getDecodeString(bool isBigEndian, int* bitcount, bool isStructureMember, bool defaultEnabled) const
+std::string ProtocolCode::getDecodeString(bool isBigEndian, int* bitcount, bool isStructureMember, bool defaultEnabled) const
 {
-    Q_UNUSED(isBigEndian);
-    Q_UNUSED(bitcount);
-    Q_UNUSED(isStructureMember);
-    Q_UNUSED(defaultEnabled);
+    (void)isBigEndian;
+    (void)bitcount;
+    (void)isStructureMember;
+    (void)defaultEnabled;
 
-    QString output;
+    std::string output;
 
-    if(decode.isEmpty())
-        return output;
+    if((support.language == ProtocolSupport::c_language) && !decode.empty())
+    {
+        if(!comment.empty())
+            output += TAB_IN + "// " + comment + "\n";
 
-    if(!comment.isEmpty())
-        output += "    // " + comment + "\n";
+        output += TAB_IN + decode + "\n";
+    }
+    else if((support.language == ProtocolSupport::cpp_language) && !decodecpp.empty())
+    {
+        if(!comment.empty())
+            output += TAB_IN + "// " + comment + "\n";
 
-    output += "    " + decode + "\n";
+        output += TAB_IN + decodecpp + "\n";
+    }
 
     return output;
 }
+
+
+//! Return the include directives that go into source code needed for this encodable
+void ProtocolCode::getSourceIncludeDirectives(std::vector<std::string>& list) const
+{
+    if(!include.empty())
+        list.push_back(include);
+}
+
 
