@@ -506,6 +506,7 @@ ProtocolField::ProtocolField(ProtocolParser* parse, std::string parent, Protocol
     encodedType(supported),
     prevField(0),
     hidden(false),
+    neverOmit(false),
     mapOptions(MAP_BOTH)
 {
     attriblist = {"name",
@@ -534,6 +535,7 @@ ProtocolField::ProtocolField(ProtocolParser* parse, std::string parent, Protocol
                   "Notes",
                   "bitfieldGroup",
                   "hidden",
+                  "neverOmit",
                   "initialValue",
                   "verifyMinValue",
                   "verifyMaxValue",
@@ -569,6 +571,7 @@ void ProtocolField::clear(void)
     extraInfoNames.clear();
     extraInfoValues.clear();
     hidden = false;
+    neverOmit = false;
     initialValueString.clear();
     verifyMinString.clear();
     verifyMaxString.clear();
@@ -1079,6 +1082,7 @@ void ProtocolField::parse(void)
     verifyMinString = ProtocolParser::getAttribute("verifyMinValue", map);
     verifyMaxString = ProtocolParser::getAttribute("verifyMaxValue", map);
     hidden = ProtocolParser::isFieldSet("hidden", map);
+    neverOmit = ProtocolParser::isFieldSet("neverOmit", map);
     checkConstant = ProtocolParser::isFieldSet("checkConstant", map);
 
     extraInfoValues.push_back(ProtocolParser::getAttribute("Units", map));
@@ -1161,6 +1165,28 @@ void ProtocolField::parse(void)
         // in memory type is
         if(overridesPrevious)
             inMemoryType = encodedType;
+    }
+
+    // If we have a hidden field, and we are not supposed to omit code for that
+    // field, we treat it as null. This is because we *must* omit the code in
+    // order to adhere to the encoding packet rules. This may break some code
+    // if other fields depend on the hidden field.
+    if(hidden && !neverOmit && support.omitIfHidden)
+    {
+        comment = "Hidden field skipped";
+        inMemoryType.clear();
+        inMemoryType.isNull = true;
+
+        // No scaling
+        scalerString.clear();
+        maxString.clear();
+        minString.clear();
+        verifyMaxString.clear();
+        verifyMinString.clear();
+        printScalerString.clear();
+
+        // This is not a warning, just useful information
+        std::cout << "Skipping code output for hidden field " << getHierarchicalName() << std::endl;
     }
 
     if(inMemoryType.isNull)
@@ -1704,8 +1730,15 @@ void ProtocolField::parse(void)
             // after decode will be 32767/8 = 4095.875. However if the in-Memory
             // type is an integer then this will truncate to 4095, therefore use
             // of the trunc() function
-            limitMaxStringForComment = limitMaxString = std::to_string((int)trunc(limitMaxValue));
-            limitMinStringForComment = limitMinString = std::to_string((int)trunc(limitMinValue));
+            if(limitMaxValue >= 0)
+                limitMaxStringForComment = limitMaxString = std::to_string((uint64_t)trunc(limitMaxValue));
+            else
+                limitMaxStringForComment = limitMaxString = std::to_string((int64_t)trunc(limitMaxValue));
+
+            if(limitMinValue >= 0)
+                limitMinStringForComment = limitMinString = std::to_string((uint64_t)trunc(limitMinValue));
+            else
+                limitMinStringForComment = limitMinString = std::to_string((int64_t)trunc(limitMinValue));
         }
     }
     else if(encodedType.isFloat)
@@ -1721,8 +1754,16 @@ void ProtocolField::parse(void)
     {
         limitMinValue = (double)encodedType.getMinimumIntegerValue();
         limitMaxValue = (double)encodedType.getMaximumIntegerValue();
-        limitMaxStringForComment = limitMaxString = std::to_string((int)round(limitMaxValue));
-        limitMinStringForComment = limitMinString = std::to_string((int)round(limitMinValue));
+
+        if(limitMaxValue >= 0)
+            limitMaxStringForComment = limitMaxString = std::to_string((uint64_t)round(limitMaxValue));
+        else
+            limitMaxStringForComment = limitMaxString = std::to_string((int64_t)round(limitMaxValue));
+
+        if(limitMinValue >= 0)
+            limitMinStringForComment = limitMinString = std::to_string((uint64_t)round(limitMinValue));
+        else
+            limitMinStringForComment = limitMinString = std::to_string((int64_t)round(limitMinValue));
     }
 
     // Now handle the verify maximum value
@@ -3044,6 +3085,11 @@ std::string ProtocolField::getMapEncodeString(void) const
             // Numeric values are automatically converted to correct QVariant types
             if(inMemoryType.isFloat || !printScalerString.empty())
                 output += getEncodeFieldAccess(true) + printScalerString;
+            else if (inMemoryType.isBool && (support.language == ProtocolSupport::c_language || support.language == ProtocolSupport::cpp_language))
+            {
+                // Ensure that boolean types are encoded as unsigned chars
+                output += "(unsigned char) " + getEncodeFieldAccess(true);
+            }
             else
                 output += getEncodeFieldAccess(true);
 
@@ -3761,8 +3807,8 @@ std::string ProtocolField::getEncodeStringForBitfield(int* bitcount, bool isStru
         else
             argument = inMemoryType.toSigString() + "ScaledToBitfield(" + argument;
 
-        argument += ", " + std::to_string((int)round(encodedMin));
-        argument += ", " + std::to_string((int)round(scaler));
+        argument += ", " + std::to_string((int64_t)round(encodedMin));
+        argument += ", " + std::to_string((int64_t)round(scaler));
         argument += ", " + std::to_string(encodedType.bits);
         argument += ")";
     }
@@ -4007,12 +4053,12 @@ std::string ProtocolField::getDecodeStringForBitfield(int* bitcount, bool isStru
                         else
                             output += inMemoryType.toSigString() + "ScaledFromBitfield(" + argument;
 
-                        output += ", " + std::to_string((int)round(encodedMin)) + ", " + std::to_string((int)round(scaler)) + ");\n";
+                        output += ", " + std::to_string((int64_t)round(encodedMin)) + ", " + std::to_string((int64_t)round(scaler)) + ");\n";
                     }
                     else
                     {
                         // If the scaler is 1, add the min value directly - save the cost of the division
-                        output += "(" + std::to_string((int)round(encodedMin)) + " + " + argument + ");\n";
+                        output += "(" + std::to_string((int64_t)round(encodedMin)) + " + " + argument + ");\n";
                     }
 
                 }// If integer scaling is being done
@@ -4579,9 +4625,9 @@ std::string ProtocolField::getEncodeStringForField(bool isBigEndian, bool isStru
         {
             // Signature changes for signed versus unsigned
             if(!encodedType.isSigned)
-                output += ", " + std::to_string((int)round(encodedMin));
+                output += ", " + std::to_string((int64_t)round(encodedMin));
 
-            output +=  ", " + std::to_string((int)round(scaler));
+            output +=  ", " + std::to_string((int64_t)round(scaler));
         }
 
         output += ");\n";
@@ -4912,7 +4958,7 @@ std::string ProtocolField::getDecodeStringForField(bool isBigEndian, bool isStru
                     output += "(" + inMemoryType.toTypeString() + ")";
 
                 // "int32FromBeBytes(data, &_pg_byteindex)" for example
-                output += "(" + encodedType.toSigString() + "From" + endian + "Bytes(_pg_data, &_pg_byteindex) + " + std::to_string((int)round(encodedMin)) + ");\n";
+                output += "(" + encodedType.toSigString() + "From" + endian + "Bytes(_pg_data, &_pg_byteindex) + " + std::to_string((int64_t)round(encodedMin)) + ");\n";
             }
             else
             {
@@ -4933,9 +4979,9 @@ std::string ProtocolField::getDecodeStringForField(bool isBigEndian, bool isStru
 
                 // Signature changes for signed versus unsigned
                 if(!encodedType.isSigned)
-                    output += ", " + std::to_string((int)round(encodedMin));
+                    output += ", " + std::to_string((int64_t)round(encodedMin));
 
-                output += ", " + std::to_string((int)round(scaler));
+                output += ", " + std::to_string((int64_t)round(scaler));
 
                 output += ");\n";
             }
